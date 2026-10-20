@@ -102,14 +102,17 @@ Postgres 16 (Docker, docker-compose.yml, named volume)
 ## 5. Data model (Postgres)
 
 **Conventions:**
-- All prices are `NUMERIC(14,4)`, stored **unadjusted**.
+- All prices are `NUMERIC(14,4)`, stored **exactly as the source provides them**. Each bar records its basis in `price_basis`:
+  - `yfinance` is **split-adjusted**. This was verified on 2026-10-20: with `auto_adjust=False`, AAPL's close before its 4:1 split of 2020-08-31 is 124.81, not about 499.
+  - `kite`'s basis is confirmed by the live check (§11) before Kite bars are trusted alongside yfinance.
+  - `corporate_actions` still records splits and bonuses, so the two bases can be reconciled.
 - Dates are `DATE` in exchange-local terms; timestamps are `TIMESTAMPTZ`.
 - Every row created by ingestion carries `source` and `ingested_at`.
 
 | Table | Columns (key ones) | Constraints / notes |
 |---|---|---|
 | `instruments` | `id`, `kind` (`stock`\|`index`), `exchange`, `symbol`, `name`, `yf_symbol`, `kite_token` (nullable), `active` | Unique (`exchange`, `symbol`). Indices: NIFTY 50 (`^NSEI`), NIFTY BANK (`^NSEBANK`). |
-| `daily_bars` | `instrument_id`, `trade_date`, `open`, `high`, `low`, `close`, `volume`, `source` (`yfinance`\|`kite`\|`vendor`), `ingested_at` | PK (`instrument_id`, `trade_date`, `source`). An upsert replaces the same key, so re-runs are idempotent. |
+| `daily_bars` | `instrument_id`, `trade_date`, `open`, `high`, `low`, `close`, `volume`, `source` (`yfinance`\|`kite`\|`vendor`), `price_basis` (`split_adjusted`\|`raw`), `ingested_at` | PK (`instrument_id`, `trade_date`, `source`). An upsert replaces the same key, so re-runs are idempotent. Because yfinance re-bases its history after a new split, re-ingesting updates older rows; the job's counts show how many rows changed. |
 | `corporate_actions` | `instrument_id`, `ex_date`, `kind` (`split`\|`bonus`), `ratio_from`, `ratio_to`, `source` | Unique (`instrument_id`, `ex_date`, `kind`, `source`). Used to compute adjusted prices on read. |
 | `index_membership` | `index_name`, `instrument_id`, `valid_from`, `valid_to` (null = current), `is_backfilled_assumption` | Starts from the current Nifty 200 list. Earlier periods are explicitly flagged as assumptions (§10). |
 | `trading_calendar` | `trade_date`, `is_trading_day`, `note`, `source` (`holiday_file`\|`observed`) | Separates "closed" from "missing". |
@@ -197,7 +200,7 @@ Postgres 16 (Docker, docker-compose.yml, named volume)
 ## 10. Known limitations (stated in every later backtest report)
 
 1. **Survivorship bias.** yfinance and Kite list only currently traded stocks, so delisted or merged companies are missing. `index_membership` before Part 1's first run is a flagged assumption, built from the current list.
-2. **yfinance quality.** It's unofficial and can have gaps or late corrections. That's why bars are source-tagged, re-checked against Kite later (`source_mismatch`), and stored unadjusted with explicit corporate actions.
+2. **yfinance quality.** It's unofficial and can have gaps or late corrections. That's why bars are source-tagged, carry an explicit `price_basis` (yfinance is split-adjusted, not raw), are stored alongside explicit corporate actions, and are re-checked against Kite later (`source_mismatch`, once both sources are on the same basis).
 3. **No historical option prices** until the vendor data is bought. Option snapshots only start once the Kite plan is active and the user logs in each trading day.
 4. **End-of-day snapshots only.** Intraday option data is out of scope for swing trading on daily bars.
 
