@@ -35,3 +35,8 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 110
+
+[tool.ruff.lint]
+# Classic core rules (pyflakes + errors). ruff 0.17 widened its defaults to style modernisation;
+# that pass is deferred, not part of Part 1.
+select = ["E4", "E7", "E9", "F"]
