@@ -15,7 +15,7 @@ def nse_rows():
     ]
 
 
-def nfo_option_rows(underlying: str, expiry: date, center: int, step: int, n: int, lot: int):
+def nfo_option_rows(underlying: str, expiry: date, center: int, step: int, n: int, lot: int = 75):
     rows, token = [], 10_000_000 + (0 if underlying == "NIFTY" else 5_000_000) + expiry.toordinal() % 1000 * 1000
     for i in range(-n, n + 1):
         strike = center + i * step

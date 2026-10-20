@@ -119,7 +119,8 @@ def upsert_corporate_actions(conn: Connection, instrument_id: int, actions: Sequ
         return 0
     rows = [dict(instrument_id=instrument_id, ex_date=a.ex_date, kind=a.kind, source=source,
                  ratio_from=a.ratio_from, ratio_to=a.ratio_to) for a in actions]
-    return conn.execute(pg_insert(corporate_actions).values(rows).on_conflict_do_nothing()).rowcount
+    stmt = pg_insert(corporate_actions).values(rows).on_conflict_do_nothing()
+    return len(conn.execute(stmt.returning(corporate_actions.c.instrument_id)).all())
 
 
 def action_dates(conn: Connection, instrument_id: int) -> List[date]:
@@ -143,7 +144,8 @@ def upsert_option_contracts(conn: Connection, contracts: Sequence[OptionContract
         set_={"last_seen": stmt.excluded.last_seen, "kite_token": stmt.excluded.kite_token,
               "lot_size": stmt.excluded.lot_size},
     )
-    return conn.execute(stmt).rowcount
+    # psycopg 3 reports rowcount -1 for multi-row VALUES; count RETURNING rows instead.
+    return len(conn.execute(stmt.returning(option_contracts.c.id)).all())
 
 
 def live_option_contracts(conn: Connection, as_of: date) -> List[Tuple[int, OptionContract]]:
@@ -157,7 +159,8 @@ def live_option_contracts(conn: Connection, as_of: date) -> List[Tuple[int, Opti
 def insert_option_snapshots(conn: Connection, rows: Sequence[dict]) -> int:
     if not rows:
         return 0
-    return conn.execute(pg_insert(option_snapshots).values(list(rows)).on_conflict_do_nothing()).rowcount
+    stmt = pg_insert(option_snapshots).values(list(rows)).on_conflict_do_nothing()
+    return len(conn.execute(stmt.returning(option_snapshots.c.contract_id)).all())
 
 
 # --- runs & issues -------------------------------------------------------------

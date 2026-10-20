@@ -77,3 +77,22 @@ def test_coverage_and_actions(engine):
         assert repo.price_basis_of(conn, iid, "yfinance") == "split_adjusted"
         assert repo.days_with_any_bar(conn, date(2026, 10, 1), date(2026, 10, 31), "yfinance") == {
             date(2026, 10, 1), date(2026, 10, 2)}
+
+
+def test_multi_row_writes_report_real_counts(engine):
+    from datetime import datetime, timezone
+
+    contracts = [OptionContract("NIFTY", date(2026, 10, 27), 25000.0 + 50 * i, "CE", 75, f"N{i}CE", i)
+                 for i in range(3)]
+    with engine.begin() as conn:
+        iid = make_stock(conn)
+        assert repo.upsert_option_contracts(conn, contracts, seen_on=date(2026, 10, 21)) == 3
+        live = repo.live_option_contracts(conn, date(2026, 10, 21))
+        at = datetime(2026, 10, 21, 10, 5, tzinfo=timezone.utc)
+        rows = [dict(contract_id=cid, snapshot_at=at, last_price=1.0, bid=None, ask=None, volume=None, oi=None,
+                     underlying_price=25000.0, source="kite") for cid, _ in live]
+        assert repo.insert_option_snapshots(conn, rows) == 3
+        assert repo.insert_option_snapshots(conn, rows) == 0
+        actions = [CorporateAction(date(2026, 10, 2), "split", 1, 2), CorporateAction(date(2026, 10, 9), "split", 1, 5)]
+        assert repo.upsert_corporate_actions(conn, iid, actions, source="yfinance") == 2
+        assert repo.upsert_corporate_actions(conn, iid, actions, source="yfinance") == 0
