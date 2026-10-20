@@ -1,0 +1,9 @@
+# NSE equity trading holidays for 2026.
+# Fill in BY HAND from NSE's official "Trading Holidays" circular for 2026
+# (do not script-download nseindia.com — its terms prohibit automated collection).
+# Format, one per line:
+#   - {date: 2026-01-26, name: Republic Day}
+# Until a holiday is listed here, a day with no bars for any instrument is
+# reported as `unknown_closed_day` instead of a wall of `missing_bar` warnings.
+year: 2026
+holidays: []
