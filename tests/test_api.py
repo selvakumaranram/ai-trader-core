@@ -47,6 +47,7 @@ def test_login_callback_saves_session_without_exposing_token(engine):
     assert response.status_code == 302 and response.headers["location"].endswith("/?kite=connected")
     status = client.get("/local/kite/status").json()
     assert status["connected"] is True and status["kite_user_id"] == "AB1234"
+    assert client.get("/local/runs").json()[0]["job"] == "sync_instruments"  # synced right after login
     for path in ("/local/status", "/local/kite/status", "/local/runs", "/local/issues"):
         assert TOKEN not in client.get(path).text
 

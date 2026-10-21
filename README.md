@@ -33,7 +33,7 @@ The local market-data service for **AI Trader**: daily NSE stock and NIFTY/BANKN
   | 16:30 | daily bars |
   | 16:45 | quality checks |
 
-- Open the dashboard (`D:\ai-trader`, `npm run dev`) and go to the **Data** tab. Click **Log in to Kite** each trading morning, before 15:35, so the option snapshot can run.
+- Open the dashboard (`D:\ai-trader`, `npm run dev`) and go to the **Data** tab. Click **Log in to Kite** each trading morning, before 15:35, so the option snapshot can run. Option contracts are synced automatically right after login and before each snapshot.
 - Once your Kite data plan is active, run: `.venv/Scripts/python -m aitrader live-check`
 
 ## Tests

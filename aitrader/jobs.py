@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Callable, Dict, List, Optional
 
 from sqlalchemy.engine import Engine
@@ -32,6 +32,9 @@ QUOTE_BATCH = 500
 QUALITY_LOOKBACK_DAYS = 60
 NOT_LOGGED_IN = "Kite not logged in"
 SESSION_EXPIRED = "Kite session expired — log in again"
+DAILY_DATA_FINAL_AT = time(16, 30)  # a session daily bar is only final after the close
+SNAPSHOT_DUE_AT = time(15, 45)
+TRAILING_DAYS = 5  # daily ingest re-fetches this many sessions to repair misses and late corrections
 
 
 @dataclass
@@ -87,13 +90,15 @@ def _best_price(levels) -> Optional[float]:
 def snapshot_options(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
     kite = deps.kite()
     if kite is None:
-        _record_missed_snapshot(deps, run_id, run_date, NOT_LOGGED_IN)
         return RunResult("skipped", {}, NOT_LOGGED_IN)
+    with deps.engine.connect() as conn:
+        synced_today = repo.last_run_date(conn, "sync_instruments", ("ok",)) == run_date
+    if not synced_today:
+        sync_instruments(deps, run_date, run_id)  # the 08:30 sync is usually skipped: login happens later
     with deps.engine.connect() as conn:
         live = repo.live_option_contracts(conn, run_date)
     if not live:
-        _record_missed_snapshot(deps, run_id, run_date, "no option contracts synced")
-        return RunResult("failed", {}, "no option contracts synced — run sync_instruments first")
+        return RunResult("failed", {}, "no option contracts available from Kite")
     ids = {c.tradingsymbol: cid for cid, c in live}
     contracts = [c for _, c in live]
     underlying_quotes = kite.quote(list(UNDERLYING_QUOTE_KEYS.values()))
@@ -123,7 +128,6 @@ def snapshot_options(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
         stored = repo.insert_option_snapshots(conn, rows)
     counts = {"selected": selected_total, "snapshots": stored}
     if stored == 0:
-        _record_missed_snapshot(deps, run_id, run_date, "no option quotes returned")
         return RunResult("failed", counts, "no option quotes returned")
     return RunResult("ok" if stored == selected_total else "partial", counts)
 
@@ -134,18 +138,18 @@ def _ingest(deps: JobDeps, instruments: List[dict], start: date, end: date) -> D
     for inst in instruments:
         try:
             bars, actions = deps.bar_source.fetch(inst["yf_symbol"], start, end)
-        except Exception as exc:  # noqa: BLE001 - one bad symbol must not stop the run
+            if not bars:
+                counts["empty"] += 1
+                notes.append(f"{inst['symbol']}: empty")
+                continue
+            with deps.engine.begin() as conn:
+                inserted, updated = repo.upsert_daily_bars(conn, inst["id"], bars, source=deps.bar_source.name,
+                                                           price_basis=deps.bar_source.price_basis)
+                repo.upsert_corporate_actions(conn, inst["id"], actions, source=deps.bar_source.name)
+        except Exception as exc:  # noqa: BLE001 - one bad symbol (fetch or write) must not stop the run
             counts["failed"] += 1
             notes.append(f"{inst['symbol']}: {type(exc).__name__}")
             continue
-        if not bars:
-            counts["empty"] += 1
-            notes.append(f"{inst['symbol']}: empty")
-            continue
-        with deps.engine.begin() as conn:
-            inserted, updated = repo.upsert_daily_bars(conn, inst["id"], bars, source=deps.bar_source.name,
-                                                       price_basis=deps.bar_source.price_basis)
-            repo.upsert_corporate_actions(conn, inst["id"], actions, source=deps.bar_source.name)
         counts["inserted"] += inserted
         counts["updated"] += updated
     return {"counts": counts, "notes": notes}
@@ -158,10 +162,26 @@ def _status_for(counts: dict) -> str:
     return "failed" if problems >= counts["instruments"] else "partial"
 
 
+def _last_final_day(deps: JobDeps) -> date:
+    """The most recent trading day whose daily bar is complete (today only after 16:30 IST)."""
+    now = deps.now()
+    day = now.date()
+    if deps.calendar.is_trading_day(day) and now.time() >= DAILY_DATA_FINAL_AT:
+        return day
+    day -= timedelta(days=1)
+    while not deps.calendar.is_trading_day(day):
+        day -= timedelta(days=1)
+    return day
+
+
 def ingest_daily_bars(deps: JobDeps, run_date: date, run_id: int, start: Optional[date] = None) -> RunResult:
+    end = min(run_date, _last_final_day(deps))
+    if start is None:
+        window = deps.calendar.trading_days(end - timedelta(days=21), end)
+        start = window[-TRAILING_DAYS] if len(window) >= TRAILING_DAYS else end
     with deps.engine.connect() as conn:
         instruments = [i for i in repo.active_instruments(conn) if i["yf_symbol"]]
-    result = _ingest(deps, instruments, start or run_date, run_date)
+    result = _ingest(deps, instruments, start, end)
     counts = result["counts"]
     return RunResult(_status_for(counts), counts, "; ".join(result["notes"][:20]))
 
@@ -175,17 +195,18 @@ def _years_before(day: date, years: int) -> date:
 
 def backfill_history(deps: JobDeps, run_date: date, run_id: int, years: int = 5) -> RunResult:
     start = _years_before(run_date, years)
+    end = min(run_date, _last_final_day(deps))
     with deps.engine.connect() as conn:
         todo, skipped = [], 0
         for inst in repo.active_instruments(conn):
             if not inst["yf_symbol"]:
                 continue
             first, last = repo.bar_date_range(conn, inst["id"], deps.bar_source.name)
-            if first and last and first <= start + timedelta(days=7) and last >= run_date - timedelta(days=4):
+            if first and last and first <= start + timedelta(days=7) and last >= end:
                 skipped += 1
             else:
                 todo.append(inst)
-    result = _ingest(deps, todo, start, run_date)
+    result = _ingest(deps, todo, min(start, end), end)
     counts = {**result["counts"], "skipped": skipped}
     status = "ok" if not todo else _status_for(result["counts"])
     return RunResult(status, counts, "; ".join(result["notes"][:20]))
@@ -219,6 +240,16 @@ def run_quality_checks(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
             if source != "kite" and repo.price_basis_of(conn, iid, "kite") == deps.bar_source.price_basis:
                 kite_bars = repo.load_bars(conn, iid, source="kite", start=window_start, end=run_date)
                 issues += check_source_mismatch(bars, kite_bars, instrument_id=iid)
+        first_snap = repo.first_snapshot_day(conn)
+        if first_snap is not None:
+            now = deps.now()
+            have = repo.snapshot_days(conn, first_snap, run_date)
+            already = repo.issue_dates(conn, "missed_snapshot", first_snap, run_date)
+            for d in deps.calendar.trading_days(max(first_snap, window_start), run_date):
+                due = d < now.date() or (d == now.date() and now.time() >= SNAPSHOT_DUE_AT)
+                if due and d not in have and d not in already and d not in closed:
+                    issues.append(Issue("missed_snapshot", "warn", d,
+                                        "no option snapshot recorded (cannot be fetched later)"))
     with deps.engine.begin() as conn:
         repo.delete_issues(conn, BAR_CHECKS, window_start, run_date)
         repo.insert_issues(conn, run_id, issues)
@@ -250,4 +281,6 @@ def run_job(name: str, deps: JobDeps, run_date: date, **kwargs) -> RunResult:
         result = RunResult("failed", {}, redact_text(f"{type(exc).__name__}: {exc}")[:500])
     with deps.engine.begin() as conn:
         repo.finish_run(conn, run_id, result.status, result.counts, result.message)
+    if name == "snapshot_options" and result.status in ("skipped", "failed"):
+        _record_missed_snapshot(deps, run_id, run_date, result.message or result.status)
     return result

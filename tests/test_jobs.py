@@ -22,7 +22,7 @@ def deps(engine, kite=None, bars=None, auth_errors=None):
         kite=lambda: kite,
         bar_source=FakeBarSource(bars or {}),
         calendar=TradingCalendar(),
-        now=lambda: datetime(2026, 10, 21, 15, 35, tzinfo=IST),
+        now=lambda: datetime(2026, 10, 21, 17, 0, tzinfo=IST),
         on_auth_error=(lambda: auth_errors.append(1)) if auth_errors is not None else (lambda: None),
     )
 
@@ -165,3 +165,62 @@ def test_unknown_closed_day_detected_instead_of_missing_bars(engine):
         checks = {(i["check_name"], i["trade_date"]) for i in repo.recent_issues(conn, None, 50)}
     assert ("unknown_closed_day", date(2026, 10, 20)) in checks
     assert not any(c == "missing_bar" for c, _ in checks)
+
+
+def deps_at(engine, now, kite=None, bars=None):
+    return JobDeps(engine=engine, kite=lambda: kite, bar_source=FakeBarSource(bars or {}),
+                   calendar=TradingCalendar(), now=lambda: now)
+
+
+def test_ingest_never_stores_an_unfinished_session_and_refetches_trailing_days(engine):
+    seed(engine)
+    d = deps_at(engine, datetime(2026, 10, 21, 11, 0, tzinfo=IST))  # market still open on the 21st
+    run_job("ingest_daily_bars", d, RUN_DAY)
+    run_job("backfill_history", d, RUN_DAY, years=0)
+    calls = d.bar_source.calls
+    assert {end for _, _, end in calls} == {date(2026, 10, 20)}
+    assert date(2026, 10, 14) in {start for _, start, _ in calls}  # 5 trading days: 14,15,16,19,20
+
+
+def test_one_bad_instrument_write_does_not_abort_the_run(engine):
+    seed(engine)
+    overflow = [Bar(date(2026, 10, 21), 1e12, 1e12, 1e12, 1e12, 1)]  # exceeds NUMERIC(14,4)
+    data = {"INFY.NS": (overflow, []), "TCS.NS": (bars_for([21]), []),
+            "^NSEI": (bars_for([21]), []), "^NSEBANK": (bars_for([21]), [])}
+    result = run_job("ingest_daily_bars", deps(engine, bars=data), RUN_DAY)
+    assert result.status == "partial" and result.counts["inserted"] == 3 and result.counts["failed"] == 1
+
+
+def test_snapshot_failure_from_expired_session_records_missed_snapshot(engine):
+    seed(engine)
+    rows = option_universe()
+    run_job("sync_instruments", deps(engine, FakeKiteGateway(instruments_by_exchange={"NSE": nse_rows(),
+                                                                                     "NFO": rows})), RUN_DAY)
+    kite = FakeKiteGateway(instruments_by_exchange={"NSE": nse_rows(), "NFO": rows}, auth_fail_on={"quote"})
+    assert run_job("snapshot_options", deps(engine, kite), RUN_DAY).status == "failed"
+    with engine.connect() as conn:
+        checks = [(i["check_name"], i["trade_date"]) for i in repo.recent_issues(conn, None, 10)]
+    assert checks == [("missed_snapshot", RUN_DAY)]
+
+
+def test_snapshot_syncs_contracts_itself_when_not_synced_today(engine):
+    seed(engine)
+    rows = option_universe()
+    kite = FakeKiteGateway(instruments_by_exchange={"NSE": nse_rows(), "NFO": rows},
+                           quotes={**index_quotes(25010.0, 56040.0), **option_quotes(rows)})
+    result = run_job("snapshot_options", deps(engine, kite), RUN_DAY)
+    assert result.status == "ok" and result.counts["snapshots"] == 2 * 2 * 21 * 2
+
+
+def test_quality_flags_trading_days_without_snapshots_after_collection_started(engine):
+    seed(engine)
+    rows = option_universe()
+    kite = FakeKiteGateway(instruments_by_exchange={"NSE": nse_rows(), "NFO": rows},
+                           quotes={**index_quotes(25010.0, 56040.0), **option_quotes(rows)})
+    d19 = deps_at(engine, datetime(2026, 10, 19, 15, 35, tzinfo=IST), kite=kite)
+    run_job("snapshot_options", d19, date(2026, 10, 19))
+    run_job("run_quality_checks", deps(engine), RUN_DAY)
+    run_job("run_quality_checks", deps(engine), RUN_DAY)
+    with engine.connect() as conn:
+        missed = [i["trade_date"] for i in repo.recent_issues(conn, None, 50) if i["check_name"] == "missed_snapshot"]
+    assert sorted(missed) == [date(2026, 10, 20), date(2026, 10, 21)]

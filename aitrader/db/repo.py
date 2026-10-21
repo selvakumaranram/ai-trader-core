@@ -269,3 +269,28 @@ def close_open_memberships(conn: Connection, index_name: str, instrument_ids: Co
                                index_membership.c.instrument_id.in_(list(instrument_ids)),
                                index_membership.c.valid_to.is_(None))
                         .values(valid_to=valid_to)).rowcount
+
+
+# --- freshness helpers ---------------------------------------------------------
+
+def latest_bar_date(conn: Connection, source: str) -> Optional[date]:
+    return conn.execute(select(func.max(daily_bars.c.trade_date)).where(daily_bars.c.source == source)).scalar()
+
+
+def _snapshot_day():
+    return func.date(func.timezone("Asia/Kolkata", option_snapshots.c.snapshot_at))
+
+
+def first_snapshot_day(conn: Connection) -> Optional[date]:
+    return conn.execute(select(func.min(_snapshot_day()))).scalar()
+
+
+def snapshot_days(conn: Connection, start: date, end: date) -> Set[date]:
+    day = _snapshot_day()
+    return set(conn.execute(select(day).distinct().where(day.between(start, end))).scalars())
+
+
+def issue_dates(conn: Connection, check_name: str, start: date, end: date) -> Set[date]:
+    return set(conn.execute(select(data_quality_issues.c.trade_date).distinct()
+                            .where(data_quality_issues.c.check_name == check_name,
+                                   data_quality_issues.c.trade_date.between(start, end))).scalars())

@@ -29,7 +29,7 @@ def run_if_trading_day(name: str, deps: JobDeps) -> Optional[RunResult]:
 
 def _last_ingest_date(deps: JobDeps) -> Optional[date]:
     with deps.engine.connect() as conn:
-        return repo.last_run_date(conn, "ingest_daily_bars")
+        return repo.latest_bar_date(conn, deps.bar_source.name)
 
 
 def catch_up(deps: JobDeps) -> List[date]:

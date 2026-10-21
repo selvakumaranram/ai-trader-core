@@ -49,7 +49,8 @@ def create_app(*, deps: JobDeps, sessions: Optional[SessionStore],
         return RedirectResponse(gateway_factory(None).login_url(state), status_code=302)
 
     @app.get("/local/kite/callback")
-    def kite_callback(request_token: str = "", status: str = "", state: str = ""):
+    def kite_callback(background: BackgroundTasks, request_token: str = "", status: str = "",
+                      state: str = ""):
         if sessions is None or gateway_factory is None:
             raise HTTPException(503, NOT_CONFIGURED)
         expiry = pending_states.pop(state, None) if state else None
@@ -62,6 +63,7 @@ def create_app(*, deps: JobDeps, sessions: Optional[SessionStore],
         except KiteAuthError:
             raise HTTPException(400, "Kite rejected the login — start the login again") from None
         sessions.save(session)
+        background.add_task(run_job, "sync_instruments", deps, deps.now().date())
         return RedirectResponse(f"{dashboard_url}/?kite=connected", status_code=302)
 
     @app.post("/local/jobs/{job}/run", status_code=202)

@@ -43,3 +43,18 @@ def test_catch_up_without_history_does_nothing(monkeypatch):
 def test_scheduler_registers_four_weekday_jobs():
     sched = scheduler.build_scheduler(make_deps(datetime(2026, 10, 21, 9, 0, tzinfo=IST)))
     assert sorted(job.id for job in sched.get_jobs()) == sorted(name for name, _, _ in scheduler.SCHEDULE)
+
+
+def test_last_ingest_date_is_newest_stored_bar_including_backfill(engine):
+    from aitrader.db import repo
+    from aitrader.models import Bar
+    from fakes import FakeBarSource
+
+    with engine.begin() as conn:
+        iid = repo.upsert_instrument(conn, kind="stock", exchange="NSE", symbol="INFY", name="INFY",
+                                     yf_symbol="INFY.NS")
+        repo.upsert_daily_bars(conn, iid, [Bar(date(2026, 10, 16), 1, 2, 1, 2, 1)], source="yfinance",
+                               price_basis="split_adjusted")
+    deps = JobDeps(engine=engine, kite=lambda: None, bar_source=FakeBarSource({}), calendar=TradingCalendar(),
+                   now=lambda: datetime(2026, 10, 21, 18, 0, tzinfo=IST))
+    assert scheduler._last_ingest_date(deps) == date(2026, 10, 16)
