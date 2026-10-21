@@ -65,7 +65,7 @@ These were verified on 2026-10-20 from the sources noted. They must be re-checke
 
 ```
 React dashboard (D:\ai-trader, `npm run dev`) ── "Data" tab
-        │  /local/*   (Vite dev proxy → 127.0.0.1:8000)
+        │  /local/*   (Vite dev proxy → 127.0.0.1:8765)
         ▼
 aitrader service (FastAPI, bound to 127.0.0.1 only)
   ├── api/          JSON endpoints for the Data tab (§9)
@@ -194,7 +194,7 @@ Postgres 16 (Docker, docker-compose.yml, named volume)
 
 **In `D:\ai-trader`:**
 - A new "Data" tab component.
-- A Vite dev proxy entry, `/local` → `http://127.0.0.1:8000`.
+- A Vite dev proxy entry, `/local` → `http://127.0.0.1:8765`.
 - The tab appears **only** when `/local/status` responds, so on the deployed Vercel site it stays hidden.
 
 ## 10. Known limitations (stated in every later backtest report)

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://aitrader:aitrader@127.0.0.1:5433/aitrader"
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8765
     kite_api_key: str = ""
     kite_api_secret: SecretStr = SecretStr("")
     token_encryption_key: SecretStr = SecretStr("")

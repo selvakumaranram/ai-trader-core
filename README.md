@@ -15,7 +15,7 @@ The local market-data service for **AI Trader**: daily NSE stock and NIFTY/BANKN
    .venv/Scripts/python -m pip install -e ".[dev]"
    ```
 3. Copy `.env.example` to `.env`. Generate a `TOKEN_ENCRYPTION_KEY` with the command shown in the file. Fill in `KITE_API_KEY` and `KITE_API_SECRET` once you have a Kite Connect app. **Never commit `.env`.**
-4. In the Kite developer console, set the app's redirect URL to `http://127.0.0.1:8000/local/kite/callback`.
+4. In the Kite developer console, set the app's redirect URL to `http://127.0.0.1:8765/local/kite/callback`.
 5. Create the tables: `.venv/Scripts/python -m aitrader migrate`
 6. Download the **Nifty 200 constituents CSV** by hand from niftyindices.com (Indices → Broad Market → NIFTY 200 → "Download Index Constituents"). Then run:
    `.venv/Scripts/python -m aitrader seed-universe --csv path/to/ind_nifty200list.csv`
@@ -24,7 +24,7 @@ The local market-data service for **AI Trader**: daily NSE stock and NIFTY/BANKN
 
 ## Daily use
 
-- Start the service: `.venv/Scripts/python -m aitrader serve`. It serves http://127.0.0.1:8000 and runs these jobs on weekdays (IST):
+- Start the service: `.venv/Scripts/python -m aitrader serve`. It serves http://127.0.0.1:8765 and runs these jobs on weekdays (IST):
 
   | Time | Job |
   |---|---|
