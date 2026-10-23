@@ -19,7 +19,7 @@ The local market-data service for **AI Trader**: daily NSE stock and NIFTY/BANKN
 5. Create the tables: `.venv/Scripts/python -m aitrader migrate`
 6. Download the **Nifty 200 constituents CSV** by hand from niftyindices.com (Indices → Broad Market → NIFTY 200 → "Download Index Constituents"). Then run:
    `.venv/Scripts/python -m aitrader seed-universe --csv path/to/ind_nifty200list.csv`
-7. Load about 5 years of daily history (it takes a while): `.venv/Scripts/python -m aitrader run-job backfill_history`
+7. Load about 10 years of daily history (it takes a while): `.venv/Scripts/python -m aitrader run-job backfill_history`
 8. Fill in `aitrader/data/nse_holidays_2026.yaml` from NSE's official holiday circular.
 
 ## Daily use

@@ -193,7 +193,7 @@ def _years_before(day: date, years: int) -> date:
         return day.replace(year=day.year - years, day=28)
 
 
-def backfill_history(deps: JobDeps, run_date: date, run_id: int, years: int = 5) -> RunResult:
+def backfill_history(deps: JobDeps, run_date: date, run_id: int, years: int = 10) -> RunResult:
     start = _years_before(run_date, years)
     end = min(run_date, _last_final_day(deps))
     with deps.engine.connect() as conn:

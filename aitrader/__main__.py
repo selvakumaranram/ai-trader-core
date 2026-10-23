@@ -48,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     job = sub.add_parser("run-job", help="run one job now")
     job.add_argument("name", choices=JOB_NAMES)
     job.add_argument("--date", type=date.fromisoformat, default=None)
-    job.add_argument("--years", type=int, default=5, help="backfill_history only")
+    job.add_argument("--years", type=int, default=10, help="backfill_history only")
     sub.add_parser("live-check", help="read-only Kite round-trip once your plan is active")
     return parser
 

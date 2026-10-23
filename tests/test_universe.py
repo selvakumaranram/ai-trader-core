@@ -33,7 +33,7 @@ def test_seed_creates_indices_stocks_and_flagged_memberships(engine):
     assert ("stock", "INFY", "INFY.NS") in symbols and ("index", "NIFTY BANK", "^NSEBANK") in symbols
     assumed = [r for r in rows if r.is_backfilled_assumption]
     current = [r for r in rows if not r.is_backfilled_assumption]
-    assert len(assumed) == 2 and all(r.valid_from == date(2021, 10, 21) and r.valid_to == date(2026, 10, 20)
+    assert len(assumed) == 2 and all(r.valid_from == date(2016, 10, 21) and r.valid_to == date(2026, 10, 20)
                                      for r in assumed)
     assert len(current) == 2 and all(r.valid_to is None for r in current)
 
