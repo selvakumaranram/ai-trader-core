@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import secrets
 import time
+from datetime import date
 from typing import Callable, Dict, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 
 from aitrader.auth import SessionStore
+from aitrader.backtest.runner import (
+    INTERRUPTED, SOURCE, BacktestBusyError, BacktestInputError, BacktestRequest, create_run, execute_run,
+)
+from aitrader.backtest.types import MoneyRules
 from aitrader.db import repo
 from aitrader.jobs import JOB_NAMES, JobDeps, run_job
 from aitrader.kite.gateway import KiteAuthError, KiteGateway
@@ -15,12 +21,27 @@ from aitrader.kite.gateway import KiteAuthError, KiteGateway
 STATE_TTL_SECONDS = 600
 NOT_CONFIGURED = "Kite is not configured: set KITE_API_KEY, KITE_API_SECRET and TOKEN_ENCRYPTION_KEY in .env"
 
+_DEFAULT_MONEY = MoneyRules()
+
+
+class BacktestBody(BaseModel):
+    strategy: str
+    start: Optional[date] = None
+    end: Optional[date] = None
+    capital: float = _DEFAULT_MONEY.capital
+    risk_per_trade: float = _DEFAULT_MONEY.risk_per_trade
+    daily_loss_limit: float = _DEFAULT_MONEY.daily_loss_limit
+    max_positions: int = _DEFAULT_MONEY.max_positions
+    max_position_value: float = _DEFAULT_MONEY.max_position_value
+
 
 def create_app(*, deps: JobDeps, sessions: Optional[SessionStore],
                gateway_factory: Optional[Callable[[Optional[str]], KiteGateway]], dashboard_url: str,
                clock: Callable[[], float] = time.monotonic) -> FastAPI:
     app = FastAPI(title="aitrader local service", docs_url=None, redoc_url=None, openapi_url=None)
     pending_states: Dict[str, float] = {}
+    with deps.engine.begin() as conn:
+        repo.fail_interrupted_backtests(conn, INTERRUPTED)
 
     def kite_status() -> dict:
         if sessions is None:
@@ -83,5 +104,40 @@ def create_app(*, deps: JobDeps, sessions: Optional[SessionStore],
                limit: int = Query(50, ge=1, le=500)):
         with deps.engine.connect() as conn:
             return repo.recent_issues(conn, severity, limit)
+
+    @app.post("/local/backtests", status_code=202)
+    def start_backtest(body: BacktestBody, background: BackgroundTasks):
+        money = MoneyRules(capital=body.capital, risk_per_trade=body.risk_per_trade,
+                           daily_loss_limit=body.daily_loss_limit, max_positions=body.max_positions,
+                           max_position_value=body.max_position_value)
+        try:
+            run_id = create_run(deps.engine, BacktestRequest(body.strategy, body.start, body.end, money))
+        except BacktestInputError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except BacktestBusyError as exc:
+            raise HTTPException(409, str(exc)) from None
+        background.add_task(execute_run, deps.engine, run_id)
+        return {"id": run_id}
+
+    @app.get("/local/backtests")
+    def list_backtests(limit: int = Query(20, ge=1, le=200)):
+        with deps.engine.connect() as conn:
+            return repo.list_backtest_runs(conn, limit)
+
+    @app.get("/local/backtests/{run_id}")
+    def get_backtest(run_id: int):
+        with deps.engine.connect() as conn:
+            run = repo.get_backtest_run(conn, run_id)
+        if run is None:
+            raise HTTPException(404, f"No backtest {run_id}")
+        return run
+
+    @app.get("/local/bars/{symbol}")
+    def bars(symbol: str, start: Optional[date] = None, end: Optional[date] = None):
+        with deps.engine.connect() as conn:
+            rows = repo.daily_bars_for_symbol(conn, symbol, source=SOURCE, start=start, end=end)
+        if rows is None:
+            raise HTTPException(404, f"Unknown symbol {symbol!r}")
+        return rows
 
     return app

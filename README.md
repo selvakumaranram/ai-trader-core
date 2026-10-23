@@ -45,3 +45,16 @@ The local market-data service for **AI Trader**: daily NSE stock and NIFTY/BANKN
 - **Survivorship bias.** Delisted stocks are missing from free data, and Nifty 200 membership before the first seed is an explicit assumption.
 - **yfinance prices are split-adjusted** and meant for personal use. Kite becomes the main source later.
 - **No historical option prices** until vendor data is bought. Snapshots only build up from the day Kite is active.
+
+## Backtests (Part 2)
+
+Open the dashboard's **Backtest** tab (visible while this service runs), pick a strategy
+(A Momentum, B Trend pullback, C Breakout), optionally a date range and money settings, and click Run.
+Defaults: ₹20,000 capital, ₹400 risk per trade, ₹1,000 daily loss stop, 3 positions, ₹7,000 per position,
+1:2 risk/reward, 20-day time stop, Zerodha delivery charges + 0.05% slippage.
+
+- Needs the stock list and about 10 years of history loaded first (Data tab → Load history).
+- The last 2 years are reported separately as the "unseen" period; judge strategies there.
+- NIFTY/BANKNIFTY results are index signal quality in R — not option profit.
+- Results use today's Nifty 200 list (survivorship bias) and are past behaviour only — not a promise of profit.
+- API: `POST /local/backtests`, `GET /local/backtests`, `GET /local/backtests/{id}`, `GET /local/bars/{symbol}`.
