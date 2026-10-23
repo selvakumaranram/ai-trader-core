@@ -46,7 +46,7 @@ def _years_before(day: date, years: int) -> date:
         return day.replace(year=day.year - years, day=28)
 
 
-def seed_universe(engine: Engine, csv_text: str, *, as_of: date, history_years: int = 5) -> dict:
+def seed_universe(engine: Engine, csv_text: str, *, as_of: date, history_years: int = 10) -> dict:
     constituents = parse_constituents_csv(csv_text)
     assumed_from = _years_before(as_of, history_years)
     day_before = as_of - timedelta(days=1)

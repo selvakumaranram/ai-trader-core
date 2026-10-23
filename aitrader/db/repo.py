@@ -8,6 +8,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
 from aitrader.db.schema import (
+    backtest_equity,
+    backtest_index_signals,
+    backtest_runs,
+    backtest_trades,
     corporate_actions,
     daily_bars,
     data_quality_issues,
@@ -294,3 +298,104 @@ def issue_dates(conn: Connection, check_name: str, start: date, end: date) -> Se
     return set(conn.execute(select(data_quality_issues.c.trade_date).distinct()
                             .where(data_quality_issues.c.check_name == check_name,
                                    data_quality_issues.c.trade_date.between(start, end))).scalars())
+
+
+# --- backtests -------------------------------------------------------------------
+
+def instrument_by_symbol(conn: Connection, symbol: str, exchange: str = "NSE") -> Optional[dict]:
+    row = conn.execute(select(instruments.c.id, instruments.c.kind, instruments.c.symbol)
+                       .where(instruments.c.exchange == exchange, instruments.c.symbol == symbol)).mappings().first()
+    return dict(row) if row else None
+
+
+def bar_dates(conn: Connection, instrument_id: int, source: str) -> List[date]:
+    return list(conn.execute(select(daily_bars.c.trade_date)
+                             .where(daily_bars.c.instrument_id == instrument_id, daily_bars.c.source == source)
+                             .order_by(daily_bars.c.trade_date)).scalars())
+
+
+def backtest_running(conn: Connection) -> bool:
+    return conn.execute(select(func.count()).select_from(backtest_runs)
+                        .where(backtest_runs.c.status == "running")).scalar_one() > 0
+
+
+def insert_backtest_run(conn: Connection, *, strategy: str, start_date: Optional[date], end_date: Optional[date],
+                        unseen_from: Optional[date], params: dict) -> int:
+    return conn.execute(backtest_runs.insert().values(
+        strategy=strategy, start_date=start_date, end_date=end_date, unseen_from=unseen_from, params=params,
+        status="running").returning(backtest_runs.c.id)).scalar_one()
+
+
+def backtest_run_row(conn: Connection, run_id: int) -> Optional[dict]:
+    row = conn.execute(select(backtest_runs).where(backtest_runs.c.id == run_id)).mappings().first()
+    return dict(row) if row else None
+
+
+def finish_backtest_run(conn: Connection, run_id: int, *, status: str, summary: Optional[dict] = None,
+                        message: str = "") -> None:
+    conn.execute(update(backtest_runs).where(backtest_runs.c.id == run_id)
+                 .values(status=status, summary=summary, message=message, finished_at=func.now()))
+
+
+def fail_interrupted_backtests(conn: Connection, message: str) -> int:
+    return conn.execute(update(backtest_runs).where(backtest_runs.c.status == "running")
+                        .values(status="failed", message=message, finished_at=func.now())).rowcount
+
+
+def _insert_for_run(conn: Connection, table, run_id: int, rows: Sequence[dict]) -> None:
+    if rows:
+        conn.execute(table.insert(), [dict(run_id=run_id, **r) for r in rows])
+
+
+def insert_backtest_trades(conn: Connection, run_id: int, rows: Sequence[dict]) -> None:
+    _insert_for_run(conn, backtest_trades, run_id, rows)
+
+
+def insert_backtest_equity(conn: Connection, run_id: int, rows: Sequence[dict]) -> None:
+    _insert_for_run(conn, backtest_equity, run_id, rows)
+
+
+def insert_backtest_index_signals(conn: Connection, run_id: int, rows: Sequence[dict]) -> None:
+    _insert_for_run(conn, backtest_index_signals, run_id, rows)
+
+
+def list_backtest_runs(conn: Connection, limit: int) -> List[dict]:
+    out = []
+    for r in conn.execute(select(backtest_runs).order_by(backtest_runs.c.id.desc()).limit(limit)).mappings():
+        row = dict(r)
+        row.pop("params", None)
+        if row["summary"]:
+            row["summary"] = {"whole": row["summary"].get("whole"), "checklist": row["summary"].get("checklist")}
+        out.append(row)
+    return out
+
+
+def get_backtest_run(conn: Connection, run_id: int) -> Optional[dict]:
+    run = backtest_run_row(conn, run_id)
+    if run is None:
+        return None
+    run["trades"] = [dict(r) for r in conn.execute(
+        select(backtest_trades).where(backtest_trades.c.run_id == run_id)
+        .order_by(backtest_trades.c.entry_date, backtest_trades.c.id)).mappings()]
+    run["equity"] = [dict(r) for r in conn.execute(
+        select(backtest_equity).where(backtest_equity.c.run_id == run_id)
+        .order_by(backtest_equity.c.trade_date)).mappings()]
+    run["index_signals"] = [dict(r) for r in conn.execute(
+        select(backtest_index_signals).where(backtest_index_signals.c.run_id == run_id)
+        .order_by(backtest_index_signals.c.signal_date, backtest_index_signals.c.id)).mappings()]
+    return run
+
+
+def daily_bars_for_symbol(conn: Connection, symbol: str, *, source: str, start: Optional[date] = None,
+                          end: Optional[date] = None) -> Optional[List[dict]]:
+    inst = instrument_by_symbol(conn, symbol)
+    if inst is None:
+        return None
+    q = (select(daily_bars.c.trade_date, daily_bars.c.open, daily_bars.c.high, daily_bars.c.low,
+                daily_bars.c.close, daily_bars.c.volume)
+         .where(daily_bars.c.instrument_id == inst["id"], daily_bars.c.source == source))
+    if start:
+        q = q.where(daily_bars.c.trade_date >= start)
+    if end:
+        q = q.where(daily_bars.c.trade_date <= end)
+    return [dict(r) for r in conn.execute(q.order_by(daily_bars.c.trade_date)).mappings()]

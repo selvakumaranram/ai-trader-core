@@ -3,6 +3,7 @@ from sqlalchemy import inspect
 EXPECTED = {
     "instruments", "daily_bars", "corporate_actions", "index_membership", "trading_calendar",
     "option_contracts", "option_snapshots", "kite_session", "ingestion_runs", "data_quality_issues",
+    "backtest_runs", "backtest_trades", "backtest_equity", "backtest_index_signals",
 }
 
 

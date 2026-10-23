@@ -224,3 +224,11 @@ def test_quality_flags_trading_days_without_snapshots_after_collection_started(e
     with engine.connect() as conn:
         missed = [i["trade_date"] for i in repo.recent_issues(conn, None, 50) if i["check_name"] == "missed_snapshot"]
     assert sorted(missed) == [date(2026, 10, 20), date(2026, 10, 21)]
+
+
+def test_backfill_defaults_to_ten_years(engine):
+    seed(engine)
+    d = deps(engine)
+    run_job("backfill_history", d, RUN_DAY)
+    assert d.bar_source.calls
+    assert all(start == date(2016, 10, 21) for _, start, _ in d.bar_source.calls)

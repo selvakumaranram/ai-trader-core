@@ -161,3 +161,76 @@ data_quality_issues = Table(
     Column("detail", Text, nullable=False),
     CheckConstraint("severity in ('info', 'warn', 'error')", name="ck_issues_severity"),
 )
+
+
+backtest_runs = Table(
+    "backtest_runs",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("strategy", String(20), nullable=False),
+    Column("start_date", Date),
+    Column("end_date", Date),
+    Column("unseen_from", Date),
+    Column("params", JSONB, nullable=False),
+    Column("status", String(10), nullable=False),
+    Column("message", Text, nullable=False, server_default=text("''")),
+    Column("summary", JSONB),
+    Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("finished_at", DateTime(timezone=True)),
+    CheckConstraint("status in ('running', 'ok', 'failed')", name="ck_backtest_runs_status"),
+)
+
+backtest_trades = Table(
+    "backtest_trades",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("run_id", Integer, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("instrument_id", Integer, ForeignKey("instruments.id")),
+    Column("symbol", String(40), nullable=False),
+    Column("signal_date", Date, nullable=False),
+    Column("entry_date", Date, nullable=False),
+    Column("entry_price", PRICE, nullable=False),
+    Column("shares", Integer, nullable=False),
+    Column("stop", PRICE, nullable=False),
+    Column("target", PRICE, nullable=False),
+    Column("exit_date", Date, nullable=False),
+    Column("exit_price", PRICE, nullable=False),
+    Column("exit_reason", String(20), nullable=False),
+    Column("charges", PRICE, nullable=False),
+    Column("pnl", PRICE, nullable=False),
+    Column("r_multiple", Numeric(12, 4), nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("facts", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    Column("period", String(10), nullable=False),
+)
+
+backtest_equity = Table(
+    "backtest_equity",
+    metadata,
+    Column("run_id", Integer, ForeignKey("backtest_runs.id", ondelete="CASCADE"), primary_key=True),
+    Column("trade_date", Date, primary_key=True),
+    Column("cash", PRICE, nullable=False),
+    Column("invested_value", PRICE, nullable=False),
+    Column("equity", PRICE, nullable=False),
+    Column("benchmark_equity", PRICE, nullable=False),
+)
+
+backtest_index_signals = Table(
+    "backtest_index_signals",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("run_id", Integer, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("symbol", String(40), nullable=False),
+    Column("direction", String(5), nullable=False),
+    Column("signal_date", Date, nullable=False),
+    Column("entry_date", Date, nullable=False),
+    Column("entry", PRICE, nullable=False),
+    Column("stop", PRICE, nullable=False),
+    Column("target", PRICE, nullable=False),
+    Column("exit_date", Date, nullable=False),
+    Column("exit", PRICE, nullable=False),
+    Column("exit_reason", String(20), nullable=False),
+    Column("r_multiple", Numeric(12, 4), nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("period", String(10), nullable=False),
+)
