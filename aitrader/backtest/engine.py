@@ -1,6 +1,7 @@
 """Day-by-day portfolio simulation. Decisions at day t use rows <= t; entries fill at t+1's open."""
 from __future__ import annotations
 
+import math
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date
@@ -13,6 +14,7 @@ from aitrader.backtest.indicators import MIN_BARS, MIN_TRADED_VALUE
 from aitrader.backtest.rules import exit_check, gap_skip, planned_target, size_position
 from aitrader.backtest.types import LONG, Candidate, EquityPoint, MoneyRules, Trade
 
+MIN_FILL_FRACTION = 0.5  # skip entries that cash can fund at less than half the intended size
 _EMPTY = pd.DataFrame(columns=["open", "high", "low", "close", "volume", "bars", "value20"])
 
 
@@ -96,14 +98,15 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 skips[gap] += 1
                 continue
             fill = open_ * (1 + costs.slippage)
-            shares = size_position(fill, cand.stop, money)
-            if shares < 1:
+            wanted = size_position(fill, cand.stop, money)
+            if wanted < 1:
                 skips["size_zero"] += 1
                 continue
-            while shares > 0 and shares * fill + costs.buy_charges(shares * fill) > cash:
-                shares -= 1
-            if shares < 1:
-                skips["no_cash"] += 1
+            # charges are sub-additive, so this never overspends cash
+            affordable = math.floor(cash / (fill + costs.buy_charges(fill)))
+            shares = min(wanted, affordable)
+            if shares < max(1, math.ceil(wanted * MIN_FILL_FRACTION)):
+                skips["no_cash"] += 1  # a leftover-cash crumb would distort R and pay fixed charges for nothing
                 continue
             charges = costs.buy_charges(shares * fill)
             cash -= shares * fill + charges

@@ -147,3 +147,10 @@ def test_no_lookahead_changing_future_bars_changes_no_earlier_decision():
     assert entries(base) and entries(base) == entries(other)
     upto = [p for p in base.equity if p.day <= cut.date()]
     assert upto == other.equity[:len(upto)]
+
+
+def test_leftover_cash_crumb_position_is_skipped():
+    # 7,500 capital: AAA takes 69 shares (≈ ₹6,912); the ≈ ₹588 left would buy only 5 of BBB's intended 69 shares
+    res, _ = run({"AAA": prep([FLAT] * 3), "BBB": prep([FLAT] * 3)},
+                 {0: [("AAA", 100, 95, 2.0), ("BBB", 100, 95, 1.0)]}, money=MoneyRules(capital=7500))
+    assert [t.symbol for t in res.trades] == ["AAA"] and res.skips == {"no_cash": 1}
