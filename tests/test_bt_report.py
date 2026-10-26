@@ -71,3 +71,13 @@ def test_download_unknown_or_unfinished_run(engine):
                                           unseen_from=None, params={})
         repo.finish_backtest_run(conn, run_id, status="failed", message="x")
     assert c.get(f"/local/backtests/{run_id}/trades.csv").status_code == 400
+
+
+def test_report_lists_flag_types(engine):
+    run = finished_run(engine)
+    run["summary"]["data_flags"] = [
+        {"symbol": "AAA", "date": "2024-01-01", "kind": "adjustment", "detail": "overnight gap -75.0% ≈ ×4"},
+        {"symbol": "BBB", "date": "2020-03-06", "kind": "large_move", "detail": "close-to-close move -56.1%"}]
+    md = report_markdown(run)
+    assert "| AAA | 2024-01-01 | Likely unadjusted split/bonus |" in md
+    assert "| BBB | 2020-03-06 | Large real move |" in md

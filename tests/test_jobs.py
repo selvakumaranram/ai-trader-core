@@ -245,5 +245,15 @@ def test_scan_history_flags_unadjusted_jumps_across_all_years(engine):
         assert run_job("scan_history", deps(engine), RUN_DAY).status == "ok"
     with engine.connect() as conn:
         flags = repo.history_jump_flags(conn)
-    assert [(f["instrument_id"], f["trade_date"]) for f in flags] == [(iid, date(2017, 1, 5))]
+    assert [(f["instrument_id"], f["trade_date"], f["check_name"]) for f in flags] == [
+        (iid, date(2017, 1, 5), "history_adjustment")]
     assert "-75.0%" in flags[0]["detail"]
+
+
+def test_backfill_runs_the_history_scan_afterwards(engine):
+    seed(engine)
+    bar = Bar(RUN_DAY, 100, 101, 99, 100, 10)
+    bars = {yf: ([bar], []) for yf in ("INFY.NS", "TCS.NS", "^NSEI", "^NSEBANK")}
+    assert run_job("backfill_history", deps(engine, bars=bars), RUN_DAY, years=0).status == "ok"
+    with engine.connect() as conn:
+        assert repo.last_run_per_job(conn)["scan_history"]["status"] == "ok"

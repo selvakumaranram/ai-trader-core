@@ -108,7 +108,8 @@ def report_markdown(run: dict) -> str:
     add(f"- **Period tested:** {run['start_date']} → {run['end_date']} (daily candles)")
     add(f"- **Unseen period (judge here):** {run['unseen_from']} → {run['end_date']} — the last 2 years")
     add("- **Universe:** the stocks in the local database today (Nifty 200 list) + NIFTY 50 and NIFTY BANK")
-    add("- **Data:** Yahoo Finance daily prices (split-adjusted)\n")
+    add("- **Data:** Yahoo Finance daily prices, split-adjusted by Yahoo; cases Yahoo missed are flagged in "
+        "section 4\n")
 
     add("## 1. What the strategy does\n")
     add(RULES.get(run["strategy"], "(see the design spec)") + "\n")
@@ -176,8 +177,8 @@ def report_markdown(run: dict) -> str:
     L.extend(f"| {k.replace('_', ' ')} | {v} |"
              for k, v in sorted((s.get("skips") or {}).items(), key=lambda kv: -kv[1]))
     add("\n*no slot = all positions already open; no cash = cash couldn't fund at least half the intended size; "
-        "size zero = one share would exceed the per-position limit; data problem = the stock had a flagged price "
-        "jump nearby.*\n")
+        "size zero = one share would exceed the per-position limit; data problem = a likely unadjusted split/bonus "
+        "in that stock within the previous ~300 days.*\n")
 
     if s.get("index_signals"):
         add("### NIFTY / BANKNIFTY signals — index signal quality in R, **not option profit**\n")
@@ -191,10 +192,13 @@ def report_markdown(run: dict) -> str:
     L.extend(f"- {w}" for w in s.get("warnings", []))
     flags = s.get("data_flags") or []
     if flags:
-        add("\nPrice jumps flagged by the full-history data check (trades in these stocks were skipped or closed "
-            "around these dates):\n")
-        add("| Symbol | Date | Detail |\n|---|---|---|")
-        L.extend(f"| {f['symbol']} | {f['date']} | {f['detail']} |" for f in flags)
+        add("\nOne-day price jumps over 35% found by the full-history data check. **Likely unadjusted "
+            "split/bonus**: no entries for ~300 days after it, and an open trade was closed at its last good price. "
+            "**Large real move**: kept exactly as it happened.\n")
+        add("| Symbol | Date | Type | Detail |\n|---|---|---|---|")
+        L.extend(f"| {f['symbol']} | {f['date']} | "
+                 f"{'Likely unadjusted split/bonus' if f.get('kind') == 'adjustment' else 'Large real move'} | "
+                 f"{f['detail']} |" for f in flags)
     odd = [t for t in trades if abs(float(t["r_multiple"])) > 3]
     if odd:
         add("\nTrades with results beyond ±3R (gaps, tiny stop distances, or data errors):\n")

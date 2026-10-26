@@ -133,6 +133,21 @@ def _signal_row(s: IndexSignal, unseen_from: date) -> dict:
                 period="unseen" if s.entry_date >= unseen_from else "earlier")
 
 
+def _data_warnings(data_flags: list, scanned_at, ingested_at) -> list:
+    out = []
+    if scanned_at is None or (ingested_at is not None and scanned_at < ingested_at):
+        out.append("The full-history price-jump scan has not run since the latest data load — click 'Scan full "
+                   "history for price jumps' (Data tab) and re-run this backtest; unadjusted splits/bonuses may "
+                   "distort these results.")
+    if data_flags:
+        adj = sum(1 for f in data_flags if f["kind"] == "adjustment")
+        out.append(f"{len(data_flags)} one-day price jumps over 35% fall in or just before this period: {adj} look "
+                   "like unadjusted splits/bonuses (no entries for ~300 days after them; open trades closed at "
+                   f"the last good price) and {len(data_flags) - adj} look like real moves and were kept as they "
+                   "happened. See the data-flags table.")
+    return out
+
+
 def _execute(engine: Engine, run_id: int) -> None:
     with engine.connect() as conn:
         run = repo.backtest_run_row(conn, run_id)
@@ -149,9 +164,14 @@ def _execute(engine: Engine, run_id: int) -> None:
     frames = {s: add_indicators(f) for s, f in market.stocks.items()}
     with engine.connect() as conn:
         flag_rows = [f for f in repo.history_jump_flags(conn) if f["symbol"] in market.stocks]
+        scanned_at = repo.last_finished_run_at(conn, "scan_history")
+        ingested_at = repo.latest_bar_ingested_at(conn, SOURCE)
+    # Only likely unadjusted splits/bonuses (an overnight gap matching a split factor, visible at the open)
+    # change trades; large real-looking moves are kept so real crashes count in full.
     flags: dict = {}
     for f in flag_rows:
-        flags.setdefault(f["symbol"], set()).add(f["trade_date"])
+        if f["check_name"] == "history_adjustment":
+            flags.setdefault(f["symbol"], set()).add(f["trade_date"])
     sim = simulate(frames, days, STRATEGIES[run["strategy"]](), money, costs, data_flags=flags)
     bench = benchmark_curve(nifty["close"], days, money.capital)
     summary = summarize(sim, bench, money, unseen_from)
@@ -161,8 +181,11 @@ def _execute(engine: Engine, run_id: int) -> None:
         for symbol, f in sorted(market.indices.items()):
             signals += index_signals(add_indicators(f), symbol, days, idx_strategy, money)
     summary["index_signals"] = index_summary(signals, unseen_from)
-    summary["data_flags"] = [{"symbol": f["symbol"], "date": f["trade_date"].isoformat(), "detail": f["detail"]}
-                             for f in flag_rows if start - FLAG_LOOKBACK <= f["trade_date"] <= end]
+    summary["data_flags"] = [
+        {"symbol": f["symbol"], "date": f["trade_date"].isoformat(),
+         "kind": "adjustment" if f["check_name"] == "history_adjustment" else "large_move", "detail": f["detail"]}
+        for f in flag_rows if start - FLAG_LOOKBACK <= f["trade_date"] <= end]
+    summary["warnings"] += _data_warnings(summary["data_flags"], scanned_at, ingested_at)
     with engine.begin() as conn:
         repo.insert_backtest_trades(conn, run_id, [_trade_row(t, market.instrument_ids, unseen_from)
                                                    for t in sim.trades])

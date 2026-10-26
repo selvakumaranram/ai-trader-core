@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Collection, Iterable, List, Optional, Sequence, Set
 
-from aitrader.models import Bar, Issue
+from aitrader.models import Bar, CorporateAction, Issue
 
 BAR_CHECKS = ("missing_bar", "ohlc_invalid", "unexplained_jump", "stale_repeat",
               "source_mismatch", "unknown_closed_day")
@@ -91,3 +91,60 @@ def check_source_mismatch(primary: Sequence[Bar], secondary: Sequence[Bar], tole
 
 def find_unknown_closed_days(days_with_any_bar: Collection[date], expected_days: Iterable[date]) -> List[date]:
     return sorted(d for d in expected_days if d not in days_with_any_bar)
+
+
+# --- full-history scan -----------------------------------------------------------
+
+ADJUSTMENT_FACTORS = (1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 10.0)  # common bonus/split price ratios
+FACTOR_TOLERANCE = 0.03
+ACTION_RATIO_TOLERANCE = 0.10
+HISTORY_CHECKS = ("history_adjustment", "history_jump")
+
+
+def _gap_ratio(prev_close: float, open_: float) -> float:
+    return prev_close / open_ if open_ < prev_close else open_ / prev_close
+
+
+def adjustment_factor(prev_close: float, open_: float) -> Optional[float]:
+    """The split/bonus factor an overnight gap matches, if any (visible at the open)."""
+    if prev_close <= 0 or open_ <= 0:
+        return None
+    ratio = _gap_ratio(prev_close, open_)
+    return next((f for f in ADJUSTMENT_FACTORS if abs(ratio / f - 1) <= FACTOR_TOLERANCE), None)
+
+
+def _explained_by_action(prev: Bar, cur: Bar, actions: Sequence[CorporateAction]) -> bool:
+    ratio = _gap_ratio(prev.close, cur.open)
+    for a in actions:
+        if abs((cur.trade_date - a.ex_date).days) > 1 or a.ratio_from <= 0 or a.ratio_to <= 0:
+            continue
+        expected = max(a.ratio_to / a.ratio_from, a.ratio_from / a.ratio_to)
+        if abs(ratio / expected - 1) <= ACTION_RATIO_TOLERANCE:
+            return True
+    return False
+
+
+def scan_history_jumps(bars: Sequence[Bar], actions: Sequence[CorporateAction], threshold: float,
+                       instrument_id: Optional[int] = None) -> List[Issue]:
+    """Large one-day moves across the whole history, split into likely unadjusted corporate actions
+    (an overnight gap matching a split/bonus factor) and large real-looking moves (kept in backtests)."""
+    ordered = _ordered(bars)
+    issues = []
+    for prev, cur in zip(ordered, ordered[1:]):
+        if prev.close <= 0 or cur.open <= 0:
+            continue
+        gap, close_move = cur.open / prev.close - 1, cur.close / prev.close - 1
+        if abs(gap) <= threshold and abs(close_move) <= threshold:
+            continue
+        if _explained_by_action(prev, cur, actions):
+            continue
+        factor = adjustment_factor(prev.close, cur.open) if abs(gap) > threshold else None
+        if factor:
+            issues.append(Issue("history_adjustment", "error", cur.trade_date,
+                                f"overnight gap {gap:+.1%} ≈ ×{factor:g} with no matching recorded split/bonus — "
+                                "looks like an unadjusted corporate action", instrument_id))
+        else:
+            label, move = ("close-to-open", gap) if abs(gap) > threshold else ("close-to-close", close_move)
+            issues.append(Issue("history_jump", "warn", cur.trade_date,
+                                f"{label} move {move:+.1%} — large move, kept in backtests", instrument_id))
+    return issues

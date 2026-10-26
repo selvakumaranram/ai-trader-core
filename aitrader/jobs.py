@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Callable, Dict, List, Optional
 
@@ -21,6 +21,8 @@ from aitrader.quality import (
     check_source_mismatch,
     check_stale,
     find_unknown_closed_days,
+    HISTORY_CHECKS,
+    scan_history_jumps,
 )
 from aitrader.redaction import redact_text
 from aitrader.sources.yfinance_source import DailyBarSource
@@ -268,11 +270,10 @@ def scan_history(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
             if not bars:
                 continue
             scanned += 1
-            jumps = check_jumps(bars, repo.action_dates(conn, inst["id"]), threshold=HISTORY_JUMP_THRESHOLD,
-                                instrument_id=inst["id"])
-            flags += [replace(i, check_name="history_jump") for i in jumps]
+            flags += scan_history_jumps(bars, repo.corporate_actions_of(conn, inst["id"]),
+                                        HISTORY_JUMP_THRESHOLD, instrument_id=inst["id"])
     with deps.engine.begin() as conn:
-        repo.delete_issues(conn, ["history_jump"], date.min, date.max)
+        repo.delete_issues(conn, HISTORY_CHECKS, date.min, date.max)
         repo.insert_issues(conn, run_id, flags)
     return RunResult("ok", {"instruments": scanned, "flags": len(flags)})
 
@@ -302,6 +303,8 @@ def run_job(name: str, deps: JobDeps, run_date: date, **kwargs) -> RunResult:
         result = RunResult("failed", {}, redact_text(f"{type(exc).__name__}: {exc}")[:500])
     with deps.engine.begin() as conn:
         repo.finish_run(conn, run_id, result.status, result.counts, result.message)
+    if name == "backfill_history" and result.status in ("ok", "partial"):
+        run_job("scan_history", deps, run_date)  # new history can contain unadjusted bonuses/splits
     if name == "snapshot_options" and result.status in ("skipped", "failed"):
         _record_missed_snapshot(deps, run_id, run_date, result.message or result.status)
     return result
