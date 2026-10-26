@@ -57,4 +57,6 @@ Defaults: ₹20,000 capital, ₹400 risk per trade, ₹1,000 daily loss stop, 3 
 - The last 2 years are reported separately as the "unseen" period; judge strategies there.
 - NIFTY/BANKNIFTY results are index signal quality in R — not option profit.
 - Results use today's Nifty 200 list (survivorship bias) and are past behaviour only — not a promise of profit.
+- Each finished run has **Download** links: a Markdown study report (paste it into Claude or another AI) plus all trades and the daily account value as CSV.
+- Before backtesting, click **Scan full history for price jumps** (Data tab, or `python -m aitrader run-job scan_history`). It flags one-day moves beyond ±35% with no recorded split/bonus (e.g. an unadjusted bonus in Yahoo data); backtests then skip entries near a flagged date and close held trades at the last good price.
 - API: `POST /local/backtests`, `GET /local/backtests`, `GET /local/backtests/{id}`, `GET /local/bars/{symbol}`.

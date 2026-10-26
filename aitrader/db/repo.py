@@ -399,3 +399,12 @@ def daily_bars_for_symbol(conn: Connection, symbol: str, *, source: str, start: 
     if end:
         q = q.where(daily_bars.c.trade_date <= end)
     return [dict(r) for r in conn.execute(q.order_by(daily_bars.c.trade_date)).mappings()]
+
+
+def history_jump_flags(conn: Connection) -> List[dict]:
+    q = (select(data_quality_issues.c.instrument_id, instruments.c.symbol, data_quality_issues.c.trade_date,
+                data_quality_issues.c.detail)
+         .select_from(data_quality_issues.join(instruments, instruments.c.id == data_quality_issues.c.instrument_id))
+         .where(data_quality_issues.c.check_name == "history_jump")
+         .order_by(instruments.c.symbol, data_quality_issues.c.trade_date))
+    return [dict(r) for r in conn.execute(q).mappings()]

@@ -4,8 +4,8 @@ from __future__ import annotations
 import math
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date
-from typing import Dict, List, Sequence, Tuple
+from datetime import date, timedelta
+from typing import Collection, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -14,6 +14,8 @@ from aitrader.backtest.indicators import MIN_BARS, MIN_TRADED_VALUE
 from aitrader.backtest.rules import exit_check, gap_skip, planned_target, size_position
 from aitrader.backtest.types import LONG, Candidate, EquityPoint, MoneyRules, Trade
 
+# A flagged price jump (e.g. an unadjusted bonus) corrupts ~200 trading days of indicators that follow it.
+FLAG_LOOKBACK = timedelta(days=300)
 MIN_FILL_FRACTION = 0.5  # skip entries that cash can fund at less than half the intended size
 _EMPTY = pd.DataFrame(columns=["open", "high", "low", "close", "volume", "bars", "value20"])
 
@@ -61,7 +63,12 @@ def _close(pos: _Position, day: date, price: float, reason: str, costs: CostMode
 
 
 def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], strategy, money: MoneyRules,
-             costs: CostModel) -> SimResult:
+             costs: CostModel, data_flags: Optional[Dict[str, Collection[date]]] = None) -> SimResult:
+    flags = data_flags or {}
+
+    def near_flag(symbol: str, day: date) -> bool:
+        return any(day - FLAG_LOOKBACK <= f <= day for f in flags.get(symbol, ()))
+
     by_day = day_slices(frames, days)
     cash = money.capital
     positions: Dict[str, _Position] = {}
@@ -90,6 +97,9 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 continue
             if cand.symbol not in today.index:
                 skips["missing_bar"] += 1
+                continue
+            if near_flag(cand.symbol, d):
+                skips["data_problem"] += 1
                 continue
             open_ = float(today.at[cand.symbol, "open"])
             gap = gap_skip(LONG, open_, cand.stop,
@@ -120,6 +130,13 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
             pos = positions[symbol]
             if symbol not in today.index:
                 notes["missing_bar_days"] += 1
+                continue
+            if d in flags.get(symbol, ()):  # the price series breaks here: close at the last good price
+                trade, proceeds = _close(pos, d, pos.last_close, "data_problem", costs)
+                cash += proceeds
+                realised += trade.pnl
+                trades.append(trade)
+                del positions[symbol]
                 continue
             bar = tuple(float(today.at[symbol, k]) for k in ("open", "high", "low", "close"))
             entry_day = pos.entry_date == d

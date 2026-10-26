@@ -106,3 +106,22 @@ def test_unexpected_error_marks_run_failed(engine, monkeypatch):
     with engine.connect() as conn:
         row = repo.backtest_run_row(conn, run_id)
     assert (row["status"], row["message"]) == ("failed", "backtest failed: ZeroDivisionError")
+
+
+def test_flagged_jumps_are_listed_in_the_summary(engine):
+    from aitrader.models import Issue
+    series = {"NIFTY 50": flat(280, volume=0), "BRK": breakout_series(), "FL1": flat(280)}
+    days = seed(engine, series)
+    with engine.begin() as conn:
+        fl1 = repo.instrument_by_symbol(conn, "FL1")["id"]
+        job = repo.start_run(conn, "scan_history", days[-1].date())
+        repo.insert_issues(conn, job, [Issue("history_jump", "warn", days[230].date(), "close-to-close move -75.0%",
+                                             fl1)])
+    run_id = create_run(engine, BacktestRequest("breakout"))
+    execute_run(engine, run_id)
+    with engine.connect() as conn:
+        run = repo.get_backtest_run(conn, run_id)
+    assert run["status"] == "ok", run["message"]
+    assert run["summary"]["data_flags"] == [{"symbol": "FL1", "date": days[230].date().isoformat(),
+                                             "detail": "close-to-close move -75.0%"}]
+    assert [t["symbol"] for t in run["trades"]] == ["BRK"]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from typing import Callable, Dict, List, Optional
 
@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 UNDERLYING_QUOTE_KEYS = {"NIFTY": "NSE:NIFTY 50", "BANKNIFTY": "NSE:NIFTY BANK"}
 QUOTE_BATCH = 500
 QUALITY_LOOKBACK_DAYS = 60
+HISTORY_JUMP_THRESHOLD = 0.35  # one-day moves beyond this with no recorded split/bonus are flagged
 NOT_LOGGED_IN = "Kite not logged in"
 SESSION_EXPIRED = "Kite session expired — log in again"
 DAILY_DATA_FINAL_AT = time(16, 30)  # a session daily bar is only final after the close
@@ -256,11 +257,31 @@ def run_quality_checks(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
     return RunResult("ok", {"instruments_checked": checked, "no_data": no_data, "issues": len(issues)})
 
 
+def scan_history(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
+    """Flag unexplained one-day price jumps across each instrument's whole history (e.g. an unadjusted bonus)."""
+    source = deps.bar_source.name
+    flags: List[Issue] = []
+    scanned = 0
+    with deps.engine.connect() as conn:
+        for inst in repo.active_instruments(conn):
+            bars = repo.load_bars(conn, inst["id"], source=source)
+            if not bars:
+                continue
+            scanned += 1
+            jumps = check_jumps(bars, repo.action_dates(conn, inst["id"]), threshold=HISTORY_JUMP_THRESHOLD,
+                                instrument_id=inst["id"])
+            flags += [replace(i, check_name="history_jump") for i in jumps]
+    with deps.engine.begin() as conn:
+        repo.delete_issues(conn, ["history_jump"], date.min, date.max)
+        repo.insert_issues(conn, run_id, flags)
+    return RunResult("ok", {"instruments": scanned, "flags": len(flags)})
+
 _JOBS: Dict[str, Callable[..., RunResult]] = {
     "sync_instruments": sync_instruments,
     "snapshot_options": snapshot_options,
     "ingest_daily_bars": ingest_daily_bars,
     "run_quality_checks": run_quality_checks,
+    "scan_history": scan_history,
     "backfill_history": backfill_history,
 }
 JOB_NAMES = tuple(_JOBS)

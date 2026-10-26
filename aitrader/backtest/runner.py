@@ -10,7 +10,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from aitrader.backtest.bars import load_market
 from aitrader.backtest.costs import CostModel
-from aitrader.backtest.engine import simulate
+from aitrader.backtest.engine import FLAG_LOOKBACK, simulate
 from aitrader.backtest.index_signals import index_signals, index_summary
 from aitrader.backtest.indicators import MIN_BARS, MIN_TRADED_VALUE, add_indicators
 from aitrader.backtest.metrics import benchmark_curve, clean_json, summarize
@@ -147,7 +147,12 @@ def _execute(engine: Engine, run_id: int) -> None:
     nifty = market.indices[BENCHMARK]
     days = [d for d in nifty.index if start <= d.date() <= end]
     frames = {s: add_indicators(f) for s, f in market.stocks.items()}
-    sim = simulate(frames, days, STRATEGIES[run["strategy"]](), money, costs)
+    with engine.connect() as conn:
+        flag_rows = [f for f in repo.history_jump_flags(conn) if f["symbol"] in market.stocks]
+    flags: dict = {}
+    for f in flag_rows:
+        flags.setdefault(f["symbol"], set()).add(f["trade_date"])
+    sim = simulate(frames, days, STRATEGIES[run["strategy"]](), money, costs, data_flags=flags)
     bench = benchmark_curve(nifty["close"], days, money.capital)
     summary = summarize(sim, bench, money, unseen_from)
     signals = []
@@ -156,6 +161,8 @@ def _execute(engine: Engine, run_id: int) -> None:
         for symbol, f in sorted(market.indices.items()):
             signals += index_signals(add_indicators(f), symbol, days, idx_strategy, money)
     summary["index_signals"] = index_summary(signals, unseen_from)
+    summary["data_flags"] = [{"symbol": f["symbol"], "date": f["trade_date"].isoformat(), "detail": f["detail"]}
+                             for f in flag_rows if start - FLAG_LOOKBACK <= f["trade_date"] <= end]
     with engine.begin() as conn:
         repo.insert_backtest_trades(conn, run_id, [_trade_row(t, market.instrument_ids, unseen_from)
                                                    for t in sim.trades])

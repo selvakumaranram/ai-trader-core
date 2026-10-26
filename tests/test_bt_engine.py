@@ -154,3 +154,24 @@ def test_leftover_cash_crumb_position_is_skipped():
     res, _ = run({"AAA": prep([FLAT] * 3), "BBB": prep([FLAT] * 3)},
                  {0: [("AAA", 100, 95, 2.0), ("BBB", 100, 95, 1.0)]}, money=MoneyRules(capital=7500))
     assert [t.symbol for t in res.trades] == ["AAA"] and res.skips == {"no_cash": 1}
+
+
+def test_held_trade_closes_at_last_good_close_on_a_flagged_jump():
+    frames = {"AAA": prep([FLAT, FLAT, FLAT, (25, 25.3, 24.7, 25, 4e6), (25, 25.3, 24.7, 25, 4e6)])}
+    days = list(frames["AAA"].index)
+    plan = {days[0]: [Candidate("AAA", LONG, days[0].date(), 100, 95, 1.0, "t", {})]}
+    res = simulate(frames, days, Scripted(plan), MoneyRules(), COSTS, data_flags={"AAA": {days[3].date()}})
+    (t,) = res.trades
+    assert (t.exit_reason, t.exit_date) == ("data_problem", days[3].date())
+    assert t.exit_price == pytest.approx(100 * 0.9995)
+
+
+@pytest.mark.parametrize("flag_days_before_entry,skipped", [(0, True), (31, True), (400, False)])
+def test_entries_near_a_flagged_jump_are_skipped(flag_days_before_entry, skipped):
+    from datetime import timedelta
+    frames = {"AAA": prep([FLAT] * 4)}
+    days = list(frames["AAA"].index)
+    flag = days[1].date() - timedelta(days=flag_days_before_entry)
+    plan = {days[0]: [Candidate("AAA", LONG, days[0].date(), 100, 95, 1.0, "t", {})]}
+    res = simulate(frames, days, Scripted(plan), MoneyRules(), COSTS, data_flags={"AAA": {flag}})
+    assert (res.skips == {"data_problem": 1}) is skipped and (len(res.trades) == 0) is skipped
