@@ -6,10 +6,11 @@ from datetime import date
 from typing import Callable, Dict, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 
 from aitrader.auth import SessionStore
+from aitrader.backtest.report import equity_csv, file_stem, report_markdown, trades_csv
 from aitrader.backtest.runner import (
     INTERRUPTED, SOURCE, BacktestBusyError, BacktestInputError, BacktestRequest, create_run, execute_run,
 )
@@ -139,5 +140,33 @@ def create_app(*, deps: JobDeps, sessions: Optional[SessionStore],
         if rows is None:
             raise HTTPException(404, f"Unknown symbol {symbol!r}")
         return rows
+
+    def _finished_run(run_id: int) -> dict:
+        with deps.engine.connect() as conn:
+            run = repo.get_backtest_run(conn, run_id)
+        if run is None:
+            raise HTTPException(404, f"No backtest {run_id}")
+        if run["status"] != "ok":
+            raise HTTPException(400, "This backtest has no results to download")
+        return run
+
+    def _download(body: str, filename: str, media_type: str, encoding: str = "utf-8") -> Response:
+        return Response(body.encode(encoding), media_type=f"{media_type}; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    @app.get("/local/backtests/{run_id}/report.md")
+    def backtest_report(run_id: int):
+        run = _finished_run(run_id)
+        return _download(report_markdown(run), f"{file_stem(run)}.md", "text/markdown")
+
+    @app.get("/local/backtests/{run_id}/trades.csv")
+    def backtest_trades_csv(run_id: int):
+        run = _finished_run(run_id)  # utf-8-sig so Excel shows ₹ and other symbols correctly
+        return _download(trades_csv(run), f"{file_stem(run)}-trades.csv", "text/csv", "utf-8-sig")
+
+    @app.get("/local/backtests/{run_id}/equity.csv")
+    def backtest_equity_csv(run_id: int):
+        run = _finished_run(run_id)
+        return _download(equity_csv(run), f"{file_stem(run)}-equity.csv", "text/csv", "utf-8-sig")
 
     return app
