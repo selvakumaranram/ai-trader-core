@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from aitrader.backtest.costs import CostModel
@@ -232,3 +233,79 @@ def test_event_day_blocks_entry():
     days = list(frame_.index)
     res, _ = run_d({"AAA": frame_}, {0: [("AAA", 100, 95)]}, blocked={days[1].date()})
     assert res.trades == [] and res.skips == {"event_day": 1}
+
+
+def test_no_lookahead_for_price_action_through_the_engine():
+    from aitrader.backtest.strategies.price_action import PriceAction
+    rng = np.random.default_rng(11)
+
+    def candles(n=420):
+        rows, prev = [], 1000.0
+        for _ in range(n):
+            o = prev * (1 + rng.normal(0, 0.006))
+            c = o * (1 + rng.normal(0.0008, 0.018))
+            rows.append((o, max(o, c) * (1 + rng.uniform(0, 0.012)), min(o, c) * (1 - rng.uniform(0, 0.02)), c,
+                         1_000_000 * rng.uniform(0.6, 2.2)))
+            prev = c
+        return rows
+
+    raw = {f"S{k}": frame(candles()) for k in range(8)}
+    days = list(raw["S0"].index)
+    cut = days[380]
+    strategy = PriceAction()
+
+    def sim(frames):
+        prepared = {s: strategy.prepare(add_indicators(f)) for s, f in frames.items()}
+        return simulate(prepared, days, strategy, MoneyRules(), COSTS)
+
+    changed = {}
+    for s, f in raw.items():
+        g = f.copy()
+        g.loc[g.index > cut, ["open", "high", "low", "close"]] *= 1.5
+        changed[s] = g
+    base, other = sim(raw), sim(changed)
+
+    def entries(res):
+        return sorted((t.symbol, t.signal_date, t.entry_date, t.entry_price, t.shares, t.stop)
+                      for t in res.trades if t.entry_date <= cut.date())
+
+    assert entries(base) and entries(base) == entries(other)
+    upto = [p for p in base.equity if p.day <= cut.date()]
+    assert upto == other.equity[:len(upto)]
+
+
+def test_price_action_decisions_never_use_later_bars():
+    """At many cut-off days, D's candidates for that day must not change when every later bar changes."""
+    from aitrader.backtest.strategies.price_action import PriceAction
+    rng = np.random.default_rng(5)
+
+    def candles(n=300):
+        rows, prev = [], 1000.0
+        for _ in range(n):
+            o = prev * (1 + rng.normal(0, 0.006))
+            c = o * (1 + rng.normal(0.0008, 0.018))
+            rows.append((o, max(o, c) * (1 + rng.uniform(0, 0.012)), min(o, c) * (1 - rng.uniform(0, 0.02)), c,
+                         1_000_000 * rng.uniform(0.6, 2.2)))
+            prev = c
+        return rows
+
+    strategy = PriceAction()
+    raw = {f"S{k}": frame(candles()) for k in range(10)}
+    base = {s: strategy.prepare(add_indicators(f)) for s, f in raw.items()}
+
+    def decisions(prepared, day):
+        rows = pd.DataFrame({s: f.loc[day] for s, f in prepared.items()}).T
+        return [(c.symbol, c.stop, c.facts["setup"]) for c in strategy.candidates(day, rows)]
+
+    seen = 0
+    for i in range(240, 298, 2):
+        day = raw["S0"].index[i]
+        changed = {}
+        for s, f in raw.items():
+            g = f.copy()
+            g.loc[g.index > day, ["open", "high", "low", "close"]] *= 1.5
+            changed[s] = strategy.prepare(add_indicators(g))
+        expected = decisions(base, day)
+        seen += len(expected)
+        assert expected == decisions(changed, day), day
+    assert seen > 0

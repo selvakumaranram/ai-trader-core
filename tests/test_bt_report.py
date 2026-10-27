@@ -106,3 +106,10 @@ def test_report_shows_loss_streak_notice(engine):
         "unseen": {"alerts": 0, "after_trades": 0, "after_win_rate": None, "after_avg_r": None}}
     md = report_markdown(run)
     assert "2 losses in a row happened 3 times" in md and "-0.40R" in md and "not paused" in md
+
+
+def test_price_action_report_never_states_the_fixed_2r_exit(engine):
+    md = report_markdown(price_action_run(engine))
+    assert "after 20 trading days" not in md and "+2R = target hit" not in md
+    assert "| Target (× risk) | 2 |" not in md and "| Time stop (trading days) | 20 |" not in md
+    assert "| Time stop (trading days) | 30 |" in md and "| Partial profit at (× risk) | 1.5 |" in md

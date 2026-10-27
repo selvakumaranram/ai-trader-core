@@ -143,15 +143,20 @@ def report_markdown(run: dict) -> str:
         "**next day's open** (no peeking ahead).")
     add("- **Size:** shares = risk per trade ÷ (entry − stop), capped by the per-position limit and the cash "
         "available. If cash can fund less than half the intended size, the trade is skipped.")
-    if run["strategy"] == "price_action":
-        add("- **D's exits replace the fixed 2R target:** half at entry + 1.5 × (entry − stop), then a "
-            "breakeven stop from the next day and a trailing stop for the rest; 30-day limit. One trade row "
-            "covers both halves (average exit price, both sells' charges).")
+    strategy_params = (run.get("params") or {}).get("strategy") or {}
+    is_d = run["strategy"] == "price_action"
+    if is_d:
+        add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at "
+            "the stop; high touches entry + 1.5 × (entry − stop) → sell **half** there, then the rest gets a "
+            "breakeven stop from the next day and trails below the lowest low of the last 5 days; **if the stop "
+            "and the 1.5R level are both touched the same day it is counted as a loss**; after 30 trading days → "
+            "sell the rest at the close. One trade row covers both halves (average exit price, both sells' "
+            "charges).")
     else:
         add("- **Target** = entry + 2 × (entry − stop).")
-    add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at the "
-        "stop; high touches the target → sell at the target; **if both happen the same day it is counted as a "
-        "loss** (daily candles can't show which came first); after 20 trading days → sell at the close.")
+        add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at "
+            "the stop; high touches the target → sell at the target; **if both happen the same day it is counted "
+            "as a loss** (daily candles can't show which came first); after 20 trading days → sell at the close.")
     add("- If closed losses in a day reach the daily loss limit, no new trades the next day.")
     add("- **Costs:** Zerodha delivery charges (STT 0.1% each side, exchange, SEBI, stamp duty, GST, DP charge "
         "per sale) plus slippage on every buy and sell.\n")
@@ -159,10 +164,14 @@ def report_markdown(run: dict) -> str:
     for label, key, fmt in (("Starting capital", "capital", rupees), ("Risk per trade", "risk_per_trade", rupees),
                             ("Daily loss stop", "daily_loss_limit", rupees),
                             ("Max open positions", "max_positions", plain),
-                            ("Max money in one stock", "max_position_value", rupees),
-                            ("Target (× risk)", "reward_multiple", plain),
-                            ("Time stop (trading days)", "time_stop_days", plain)):
+                            ("Max money in one stock", "max_position_value", rupees)):
         add(f"| {label} | {fmt(money.get(key))} |")
+    if is_d:
+        add(f"| Partial profit at (× risk) | {plain(strategy_params.get('partial_r'))} |")
+        add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
+    else:
+        add(f"| Target (× risk) | {plain(money.get('reward_multiple'))} |")
+        add(f"| Time stop (trading days) | {plain(money.get('time_stop_days'))} |")
     add("")
 
     add("## 3. Results\n")
@@ -175,7 +184,9 @@ def report_markdown(run: dict) -> str:
     add(f"| NIFTY 50 buy & hold — biggest fall | | {pct((bench.get('unseen') or {}).get('max_drawdown_pct'))} | "
         f"{pct((bench.get('whole') or {}).get('max_drawdown_pct'))} |\n")
     add("*R = profit or loss divided by the rupees risked on that trade ((entry − stop) × shares). "
-        "+2R = target hit, −1R = stop hit, before charges and slippage.*\n")
+        + ("−1R = stop hit before the partial; half sold at 1.5R then the rest out at breakeven ≈ +0.75R; all "
+           "before charges and slippage.*\n" if is_d else
+           "+2R = target hit, −1R = stop hit, before charges and slippage.*\n"))
 
     add("### Minimum-evidence checklist (not a promise of profit)\n")
     L.extend(f"- {'✅' if c['passed'] else '❌'} {c['label']}" for c in s.get("checklist", []))

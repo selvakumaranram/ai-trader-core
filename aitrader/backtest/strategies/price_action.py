@@ -41,9 +41,18 @@ class PriceAction:
     def signals(self, day: pd.Timestamp, rows: pd.DataFrame, direction: str) -> List[Candidate]:
         if rows.empty:
             return []
+        long = direction == LONG
+        # Cheap vectorised pre-filter: only rows that could match either setup get the full row-by-row check.
+        if long:
+            maybe = rows["retest_long"].astype(bool) | ((rows["trend"] == 1) & (rows["hammer"].astype(bool)
+                                                                               | rows["bull_engulf"].astype(bool)))
+        else:
+            maybe = rows["retest_short"].astype(bool) | ((rows["trend"] == -1) & (rows["shooting_star"].astype(bool)
+                                                                                  | rows["bear_engulf"].astype(bool)))
+        maybe &= ~rows["choppy"].astype(bool)
         out = []
-        for symbol in sorted(rows.index):
-            cand = self._check(day, str(symbol), rows.loc[symbol], direction == LONG)
+        for symbol in sorted(rows.index[maybe.to_numpy()]):
+            cand = self._check(day, str(symbol), rows.loc[symbol], long)
             if cand is not None:
                 out.append(cand)
         return out
