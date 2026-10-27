@@ -89,3 +89,33 @@ def test_clean_json():
     out = clean_json({"a": np.float64(1.5), "b": float("nan"), "c": [np.int64(3), math.inf], "d": date(2024, 1, 2)})
     assert out == {"a": 1.5, "b": None, "c": [3, None], "d": "2024-01-02"}
     assert type(out["c"][0]) is int
+
+
+def _seq_trades(pnls):
+    from datetime import timedelta
+    start = date(2024, 1, 1)
+    out = []
+    for i, pnl in enumerate(pnls, start=1):
+        exit_day = start + timedelta(days=10 * i)
+        t = trade(pnl, float(pnl), entry=exit_day - timedelta(days=5))
+        t.exit_date = exit_day
+        out.append(t)
+    return out
+
+
+def test_loss_streak_alerts():
+    from aitrader.backtest.metrics import loss_streak_alerts
+    got = loss_streak_alerts(_seq_trades([-1, -1, -1, 2, -1, -1, 1]))
+    assert got["alerts"] == 2 and got["after_trades"] == 3
+    assert got["after_win_rate"] == pytest.approx(2 / 3) and got["after_avg_r"] == pytest.approx(2 / 3)
+
+
+def test_no_trades_no_alerts():
+    from aitrader.backtest.metrics import loss_streak_alerts
+    assert loss_streak_alerts([]) == {"alerts": 0, "after_trades": 0, "after_win_rate": None, "after_avg_r": None}
+
+
+def test_summary_has_loss_streaks():
+    pts = [EquityPoint(date(2024, 1, 2), 20000, 0, 20000), EquityPoint(date(2024, 3, 2), 20000, 0, 20000)]
+    s = summarize(sim(pts, _seq_trades([-1, -1, 1])), [20000, 20000], MoneyRules(), date(2024, 1, 1))
+    assert s["loss_streaks"]["whole"]["alerts"] == 1 and "unseen" in s["loss_streaks"]
