@@ -81,3 +81,28 @@ def test_report_lists_flag_types(engine):
     md = report_markdown(run)
     assert "| AAA | 2024-01-01 | Likely unadjusted split/bonus |" in md
     assert "| BBB | 2020-03-06 | Large real move |" in md
+
+
+def price_action_run(engine):
+    series = {"NIFTY 50": flat(280, volume=0), "BRK": breakout_series()}
+    series.update({f"FL{i}": flat(280) for i in range(1, 5)})
+    seed(engine, series)
+    run_id = create_run(engine, BacktestRequest("price_action"))
+    execute_run(engine, run_id)
+    with engine.connect() as conn:
+        return repo.get_backtest_run(conn, run_id)
+
+
+def test_report_for_price_action_explains_rules(engine):
+    md = report_markdown(price_action_run(engine))
+    for text in ("D — Price action", "higher highs", "1.5R", "breakeven", "RBI"):
+        assert text in md, text
+
+
+def test_report_shows_loss_streak_notice(engine):
+    run = finished_run(engine)
+    run["summary"]["loss_streaks"] = {
+        "whole": {"alerts": 3, "after_trades": 5, "after_win_rate": 0.2, "after_avg_r": -0.4},
+        "unseen": {"alerts": 0, "after_trades": 0, "after_win_rate": None, "after_avg_r": None}}
+    md = report_markdown(run)
+    assert "2 losses in a row happened 3 times" in md and "-0.40R" in md and "not paused" in md

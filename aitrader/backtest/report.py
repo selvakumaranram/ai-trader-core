@@ -6,7 +6,8 @@ import io
 from collections import Counter
 from typing import Callable, List
 
-NAMES = {"momentum": "A — Momentum", "pullback": "B — Trend pullback", "breakout": "C — Breakout"}
+NAMES = {"momentum": "A — Momentum", "pullback": "B — Trend pullback", "breakout": "C — Breakout",
+         "price_action": "D — Price action"}
 
 RULES = {
     "pullback": """\
@@ -44,6 +45,30 @@ A stock becomes a candidate at the day's close when **all** of these are true:
 **Ranking for free slots:** strongest volume surge first.
 For NIFTY / BANKNIFTY the same rules run without the volume condition, in both directions
 (bullish breakout = CE idea, bearish breakdown below the 20-day low = PE idea).""",
+    "price_action": """\
+**Idea:** read the market's structure from price alone, and only buy a pullback or a retest when the trend, a
+level and the candle all agree — and only when there is room for at least 2× the risk.
+
+**Trend from structure:** a *swing high/low* is a bar higher/lower than the 2 bars on each side (it only counts
+once those 2 later bars have closed). **Uptrend** = the last two swing highs are higher highs **and** the last two
+swing lows are higher lows, with the close above the latest swing low. Downtrend is the mirror. Otherwise
+sideways → no trade.
+
+**Setup 1 — pullback to support:** in an uptrend the day's low comes within 1% of a support level (swing points
+from the last 60 days clustered within 1%, at least 2 touches) or of the 20-day EMA, and the day prints a
+**hammer** or a **bullish engulfing** candle, closing above the 20-day EMA. Stop = the candle's low.
+
+**Setup 2 — breakout and retest:** a 20-day range spanning ≤ 12% is broken by a close above its high (stocks: on
+≥ 1.5× average volume); within 5 days price comes back to within 1% of that high and closes above it.
+Stop = the lower of that day's low and (range high − 0.5 × ATR).
+
+**Filters:** stop 1–8% away; skip choppy markets (daily range in the quietest 20% of the past year); skip when the
+nearest resistance is less than 2R away; no new entries on RBI policy-announcement days or the session before.
+
+**Exits:** sell **half at 1.5R**, then move the stop to **breakeven** (from the next day) and trail the rest below
+the lowest low of the last 5 days; anything left is sold after 30 trading days.
+**Default risk:** ₹300 per trade and a ₹600 daily loss stop (1.5% / 3% of ₹20,000).
+**Ranking for free slots:** most room to the next level first (capped at 5R), retests before pullbacks.""",
 }
 
 QUESTIONS = [
@@ -118,7 +143,12 @@ def report_markdown(run: dict) -> str:
         "**next day's open** (no peeking ahead).")
     add("- **Size:** shares = risk per trade ÷ (entry − stop), capped by the per-position limit and the cash "
         "available. If cash can fund less than half the intended size, the trade is skipped.")
-    add("- **Target** = entry + 2 × (entry − stop).")
+    if run["strategy"] == "price_action":
+        add("- **D's exits replace the fixed 2R target:** half at entry + 1.5 × (entry − stop), then a "
+            "breakeven stop from the next day and a trailing stop for the rest; 30-day limit. One trade row "
+            "covers both halves (average exit price, both sells' charges).")
+    else:
+        add("- **Target** = entry + 2 × (entry − stop).")
     add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at the "
         "stop; high touches the target → sell at the target; **if both happen the same day it is counted as a "
         "loss** (daily candles can't show which came first); after 20 trading days → sell at the close.")
@@ -150,6 +180,13 @@ def report_markdown(run: dict) -> str:
     add("### Minimum-evidence checklist (not a promise of profit)\n")
     L.extend(f"- {'✅' if c['passed'] else '❌'} {c['label']}" for c in s.get("checklist", []))
     add("")
+    streaks = (s.get("loss_streaks") or {}).get("whole") or {}
+    if streaks.get("alerts"):
+        add("### ⚠ Two losses in a row\n")
+        add(f"2 losses in a row happened {streaks['alerts']} times. The {streaks['after_trades']} trades taken "
+            f"right after averaged {num(streaks['after_avg_r'])}R (win rate {pct(streaks['after_win_rate'])}). "
+            "Trading was not paused — this is a notice only, so you can judge whether pausing would have "
+            "helped.\n")
 
     gross = sum(float(t["pnl"]) + float(t["charges"]) for t in trades)
     charges = sum(float(t["charges"]) for t in trades)
