@@ -40,3 +40,22 @@ def test_index_summary_whole_and_unseen():
             "avg_r": 0.5} in rows
     assert {"symbol": "NIFTY 50", "direction": LONG, "period": "unseen", "signals": 1, "win_rate": 0.0,
             "avg_r": -1.0} in rows
+
+
+class _OneLong:
+    exit_policy = "partial_trail"
+    PARAMS = {"partial_r": 1.5, "time_stop_days": 30, "min_stop": 0.01, "max_stop": 0.08}
+
+    def signals(self, day, rows, direction):
+        from aitrader.backtest.types import Candidate
+        if direction == LONG and day == self.signal_day:
+            return [Candidate(rows.index[0], LONG, day.date(), 100.0, 95.0, 1.0, "test", {})]
+        return []
+
+
+def test_index_partial_trail_r_is_average_of_halves():
+    f = add_indicators(frame(flat(3) + [(101, 108, 100.5, 107, 0), (106, 106.5, 99.9, 100.2, 0), (100, 101, 99, 100, 0)]))
+    strat = _OneLong()
+    strat.signal_day = f.index[1]
+    (s,) = index_signals(f, "NIFTY 50", list(f.index), strat, MoneyRules())
+    assert s.exit_reason == "trail_stop" and s.r_multiple == pytest.approx(0.75)

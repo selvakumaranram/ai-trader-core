@@ -11,7 +11,9 @@ import pandas as pd
 
 from aitrader.backtest.costs import CostModel
 from aitrader.backtest.indicators import MIN_BARS, MIN_TRADED_VALUE
-from aitrader.backtest.rules import exit_check, gap_skip, planned_target, size_position
+from aitrader.backtest.rules import (
+    exit_check, gap_skip, next_trail_stop, partial_trail_check, planned_target, size_position,
+)
 from aitrader.backtest.types import LONG, Candidate, EquityPoint, MoneyRules, Trade
 
 # A flagged price jump (e.g. an unadjusted bonus) corrupts ~200 trading days of indicators that follow it.
@@ -38,6 +40,12 @@ class _Position:
     entry_charges: float
     last_close: float
     days_held: int = 0
+    stop: float = 0.0  # current stop (moves under the partial/trail policy)
+    partial_done: bool = False
+    sold_shares: int = 0
+    sold_value: float = 0.0  # proceeds of the partial sale, after slippage
+    sold_charges: float = 0.0
+    partial: Optional[dict] = None
 
 
 def day_slices(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp]) -> Dict[pd.Timestamp, pd.DataFrame]:
@@ -54,17 +62,28 @@ def _close(pos: _Position, day: date, price: float, reason: str, costs: CostMode
     fill = price * (1 - costs.slippage)
     value = pos.shares * fill
     sell = costs.sell_charges(value)
-    pnl = value - sell - (pos.shares * pos.entry_price + pos.entry_charges)
-    risk = pos.shares * (pos.entry_price - pos.cand.stop)
-    trade = Trade(pos.cand.symbol, pos.cand.signal_date, pos.entry_date, pos.entry_price, pos.shares, pos.cand.stop,
-                  pos.target, day, fill, reason, pos.entry_charges + sell, pnl, pnl / risk, pos.cand.reason,
-                  dict(pos.cand.facts))
+    total = pos.shares + pos.sold_shares
+    charges = pos.entry_charges + pos.sold_charges + sell
+    pnl = pos.sold_value + value - charges - total * pos.entry_price
+    risk = total * (pos.entry_price - pos.cand.stop)
+    exit_price = fill if not pos.sold_shares else (pos.sold_value + value) / total
+    facts = dict(pos.cand.facts)
+    if pos.partial:
+        facts["partial"] = pos.partial
+    trade = Trade(pos.cand.symbol, pos.cand.signal_date, pos.entry_date, pos.entry_price, total, pos.cand.stop,
+                  pos.target, day, exit_price, reason, charges, pnl, pnl / risk, pos.cand.reason, facts)
     return trade, value - sell
 
 
 def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], strategy, money: MoneyRules,
-             costs: CostModel, data_flags: Optional[Dict[str, Collection[date]]] = None) -> SimResult:
+             costs: CostModel, data_flags: Optional[Dict[str, Collection[date]]] = None,
+             blocked_entry_days: Optional[Collection[date]] = None) -> SimResult:
     flags = data_flags or {}
+    blocked = set(blocked_entry_days or ())
+    trail = getattr(strategy, "exit_policy", "fixed_target") == "partial_trail"
+    params = getattr(strategy, "PARAMS", {})
+    reward = params["partial_r"] if trail else money.reward_multiple
+    time_stop = params["time_stop_days"] if trail else money.time_stop_days
 
     def near_flag(symbol: str, day: date) -> bool:
         return any(day - FLAG_LOOKBACK <= f <= day for f in flags.get(symbol, ()))
@@ -98,16 +117,21 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
             if cand.symbol not in today.index:
                 skips["missing_bar"] += 1
                 continue
+            if d in blocked:
+                skips["event_day"] += 1
+                continue
             if near_flag(cand.symbol, d):
                 skips["data_problem"] += 1
                 continue
             open_ = float(today.at[cand.symbol, "open"])
-            gap = gap_skip(LONG, open_, cand.stop,
-                           planned_target(cand.signal_close, cand.stop, money.reward_multiple))
+            gap = gap_skip(LONG, open_, cand.stop, planned_target(cand.signal_close, cand.stop, reward))
             if gap:
                 skips[gap] += 1
                 continue
             fill = open_ * (1 + costs.slippage)
+            if trail and not (params["min_stop"] <= (fill - cand.stop) / fill <= params["max_stop"]):
+                skips["stop_distance"] += 1
+                continue
             wanted = size_position(fill, cand.stop, money)
             if wanted < 1:
                 skips["size_zero"] += 1
@@ -120,8 +144,8 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 continue
             charges = costs.buy_charges(shares * fill)
             cash -= shares * fill + charges
-            positions[cand.symbol] = _Position(cand, d, fill, shares,
-                                               planned_target(fill, cand.stop, money.reward_multiple), charges, fill)
+            positions[cand.symbol] = _Position(cand, d, fill, shares, planned_target(fill, cand.stop, reward),
+                                               charges, fill, stop=cand.stop)
         pending = []
 
         # 2. exits
@@ -143,8 +167,15 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
             if not entry_day:
                 pos.days_held += 1
             pos.last_close = bar[3]
-            hit = exit_check(LONG, bar, pos.cand.stop, pos.target, entry_day=entry_day, days_held=pos.days_held,
-                             time_stop=money.time_stop_days)
+            if trail:
+                partial_cash, hit = _trail_day(pos, d, bar, entry_day, time_stop, costs)
+                cash += partial_cash
+                if hit is None and i < last:
+                    pos.stop = next_trail_stop(LONG, pos.stop, pos.entry_price, pos.partial_done,
+                                               _col(today, symbol, "low5"), _col(today, symbol, "high5"))
+            else:
+                hit = exit_check(LONG, bar, pos.cand.stop, pos.target, entry_day=entry_day,
+                                 days_held=pos.days_held, time_stop=time_stop)
             if hit is None and i == last:
                 hit = (bar[3], "end_of_test")
             if hit:
@@ -172,3 +203,34 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
             pending = strategy.candidates(day, eligible)
 
     return SimResult(trades, equity, dict(skips), dict(notes))
+
+
+def _col(today: pd.DataFrame, symbol: str, column: str) -> float:
+    return float(today.at[symbol, column]) if column in today.columns else float("nan")
+
+
+def _trail_day(pos: _Position, day: date, bar, entry_day: bool, time_stop: int,
+               costs: CostModel) -> Tuple[float, Optional[Tuple[float, str]]]:
+    """One day of the partial/trail policy: (cash from a partial sale, (price, reason) if the rest closes)."""
+    act = partial_trail_check(LONG, bar, stop=pos.stop, partial_level=pos.target, partial_done=pos.partial_done,
+                              entry_day=entry_day, days_held=pos.days_held, time_stop=time_stop)
+    if act is None:
+        return 0.0, None
+    kind, price, reason = act
+    if kind == "exit":
+        return 0.0, (price, reason)
+    fill = price * (1 - costs.slippage)
+    pos.partial_done = True
+    if pos.shares == 1:  # nothing to split: the partial closes the whole position
+        pos.partial = {"date": day.isoformat(), "price": round(fill, 4), "shares": 1}
+        return 0.0, (price, "partial")
+    n = pos.shares // 2
+    value = n * fill
+    sell = costs.sell_charges(value)
+    pos.shares -= n
+    pos.sold_shares, pos.sold_value, pos.sold_charges = n, value, sell
+    pos.partial = {"date": day.isoformat(), "price": round(fill, 4), "shares": n}
+    # The rest keeps the original stop for the remainder of this day (breakeven starts tomorrow).
+    again = partial_trail_check(LONG, bar, stop=pos.stop, partial_level=pos.target, partial_done=True,
+                                entry_day=True, days_held=pos.days_held, time_stop=time_stop)
+    return value - sell, (None if again is None else (again[1], again[2]))

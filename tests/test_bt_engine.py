@@ -175,3 +175,60 @@ def test_entries_near_a_flagged_jump_are_skipped(flag_days_before_entry, skipped
     plan = {days[0]: [Candidate("AAA", LONG, days[0].date(), 100, 95, 1.0, "t", {})]}
     res = simulate(frames, days, Scripted(plan), MoneyRules(), COSTS, data_flags={"AAA": {flag}})
     assert (res.skips == {"data_problem": 1}) is skipped and (len(res.trades) == 0) is skipped
+
+
+class ScriptedD(Scripted):
+    exit_policy = "partial_trail"
+    PARAMS = {"partial_r": 1.5, "time_stop_days": 30, "min_stop": 0.01, "max_stop": 0.08}
+
+
+def run_d(frames, plan_by_index, blocked=None, money=MoneyRules()):
+    days = list(frames[next(iter(frames))].index)
+    plan = {days[i]: [Candidate(sym, LONG, days[i].date(), close, stop, 1.0, f"test {sym}", {})
+                      for sym, close, stop in cands] for i, cands in plan_by_index.items()}
+    return simulate(frames, days, ScriptedD(plan), money, COSTS, blocked_entry_days=blocked), days
+
+
+def test_partial_then_breakeven_exit():
+    rows = [FLAT, (100, 101, 99, 100, 1e6), (101, 108, 100.5, 107, 1e6), (106, 106.5, 99.9, 100.2, 1e6), FLAT]
+    res, days = run_d({"AAA": prep(rows)}, {0: [("AAA", 100, 95)]})
+    (t,) = res.trades
+    fill, level = 100.05, 100.05 + 1.5 * 5.05
+    p1, p2 = level * 0.9995, fill * 0.9995
+    assert (t.shares, t.exit_reason, t.exit_date) == (69, "trail_stop", days[3].date())
+    assert t.facts["partial"] == {"date": days[2].date().isoformat(), "price": pytest.approx(p1), "shares": 34}
+    assert t.exit_price == pytest.approx((34 * p1 + 35 * p2) / 69)
+    assert t.charges == pytest.approx(COSTS.buy_charges(69 * fill) + COSTS.sell_charges(34 * p1)
+                                      + COSTS.sell_charges(35 * p2))
+    assert t.pnl == pytest.approx(34 * p1 + 35 * p2 - 69 * fill - t.charges)
+    assert t.r_multiple == pytest.approx(t.pnl / (69 * 5.05))
+
+
+def test_partial_then_trail_then_time():
+    rows = [FLAT, (100, 101, 99, 100, 1e6), (101, 108, 100.5, 107, 1e6)]
+    rows += [(108 + 0.1 * k, 110 + 0.1 * k, 107 + 0.1 * k, 109 + 0.1 * k, 1e6) for k in range(40)]
+    frame_ = prep(rows)
+    frame_["low5"] = frame_["low"].rolling(5).min()
+    res, days = run_d({"AAA": frame_}, {0: [("AAA", 100, 95)]})
+    (t,) = res.trades
+    assert (t.exit_reason, t.exit_date) == ("time", days[31].date())
+
+
+def test_one_share_partial_closes_everything():
+    rows = [(6000, 6010, 5990, 6000, 1e6), (6000, 6010, 5990, 6000, 1e6), (6100, 6400, 6050, 6300, 1e6),
+            (6300, 6310, 6290, 6300, 1e6)]
+    res, _ = run_d({"BIG": prep(rows)}, {0: [("BIG", 6000, 5800)]})
+    (t,) = res.trades
+    assert (t.shares, t.exit_reason) == (1, "partial") and t.facts["partial"]["shares"] == 1
+
+
+def test_stop_distance_rechecked_on_fill():
+    res, _ = run_d({"AAA": prep([FLAT, (104, 105, 103, 104, 1e6), FLAT])}, {0: [("AAA", 100, 95)]})
+    assert res.trades == [] and res.skips == {"stop_distance": 1}
+
+
+def test_event_day_blocks_entry():
+    frame_ = prep([FLAT] * 4)
+    days = list(frame_.index)
+    res, _ = run_d({"AAA": frame_}, {0: [("AAA", 100, 95)]}, blocked={days[1].date()})
+    assert res.trades == [] and res.skips == {"event_day": 1}
