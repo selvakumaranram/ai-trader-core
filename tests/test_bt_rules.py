@@ -55,3 +55,45 @@ def test_size_position_caps():
     assert size_position(100.05, 90, money) == 39   # risk cap: 400 / 10.05
     assert size_position(8000, 7900, money) == 0    # one share above the position cap
     assert size_position(100, 100, money) == 0      # no risk distance
+
+
+def ptc(bar, entry_day=False, days_held=1, partial_done=False, direction=LONG, stop=95, level=107.5):
+    from aitrader.backtest.rules import partial_trail_check
+    return partial_trail_check(direction, bar, stop=stop, partial_level=level, partial_done=partial_done,
+                               entry_day=entry_day, days_held=days_held, time_stop=30)
+
+
+def test_partial_trail_gaps():
+    assert ptc((94, 96, 93, 95)) == ("exit", 94, "stop_gap")
+    assert ptc((108, 109, 107.8, 108.5)) == ("partial", 108, "partial_gap")
+    assert ptc((108, 109, 107.8, 108.5), entry_day=True, days_held=0) == ("partial", 107.5, "partial")
+    assert ptc((94, 96, 93, 95), entry_day=True, days_held=0) == ("exit", 95, "stop")
+
+
+def test_partial_trail_same_bar_is_a_loss():
+    assert ptc((100, 108, 94, 100)) == ("exit", 95, "stop_same_day")
+
+
+def test_partial_then_nothing_more_that_bar():
+    assert ptc((100, 108, 99, 106)) == ("partial", 107.5, "partial")
+    assert ptc((100, 108, 99, 106), partial_done=True, entry_day=True) is None  # same bar, original stop
+
+
+def test_after_partial_stop_is_a_trail_stop_and_time_limit():
+    assert ptc((101, 102, 99.5, 100), partial_done=True, stop=100) == ("exit", 100, "trail_stop")
+    assert ptc((101, 102, 100.5, 101.5), partial_done=True, stop=100, days_held=30) == ("exit", 101.5, "time")
+
+
+def test_partial_trail_short_mirror():
+    assert ptc((100, 101, 92, 93), direction=SHORT, stop=105, level=92.5) == ("partial", 92.5, "partial")
+    assert ptc((106, 107, 105.5, 106), direction=SHORT, stop=105, level=92.5) == ("exit", 106, "stop_gap")
+    assert ptc((100, 106, 92, 100), direction=SHORT, stop=105, level=92.5) == ("exit", 105, "stop_same_day")
+
+
+def test_next_trail_stop():
+    from aitrader.backtest.rules import next_trail_stop
+    assert next_trail_stop(LONG, 95, 100, False, 98, 110) == 95
+    assert next_trail_stop(LONG, 95, 100, True, 98, 110) == 100
+    assert next_trail_stop(LONG, 100, 100, True, 103, 110) == 103
+    assert next_trail_stop(SHORT, 105, 100, True, 90, 97) == 97
+    assert next_trail_stop(LONG, 100, 100, True, float("nan"), 110) == 100

@@ -60,3 +60,40 @@ def size_position(fill: float, stop: float, money: MoneyRules) -> int:
         return 0
     return max(0, min(math.floor(money.risk_per_trade / risk_per_share),
                       math.floor(money.max_position_value / fill)))
+
+
+def partial_trail_check(direction: str, bar: Bar4, *, stop: float, partial_level: float, partial_done: bool,
+                        entry_day: bool, days_held: int, time_stop: int) -> Optional[Tuple[str, float, str]]:
+    """Strategy D's exits: ("partial", price, reason) sells half; ("exit", price, reason) closes the rest.
+
+    Daily bars cannot order events inside a day, so a bar touching both the stop and the partial level counts
+    the stop first.
+    """
+    o, h, low, c = bar
+    long = direction == LONG
+    if not entry_day:
+        if (o <= stop) if long else (o >= stop):
+            return "exit", o, "stop_gap"
+        if not partial_done and ((o >= partial_level) if long else (o <= partial_level)):
+            return "partial", o, "partial_gap"
+    hit_stop = (low <= stop) if long else (h >= stop)
+    hit_partial = not partial_done and ((h >= partial_level) if long else (low <= partial_level))
+    if hit_stop and hit_partial:
+        return "exit", stop, "stop_same_day"
+    if hit_stop:
+        return "exit", stop, "trail_stop" if partial_done else "stop"
+    if hit_partial:
+        return "partial", partial_level, "partial"
+    if days_held >= time_stop:
+        return "exit", c, "time"
+    return None
+
+
+def next_trail_stop(direction: str, stop: float, entry: float, partial_done: bool, low5: float,
+                    high5: float) -> float:
+    """After the partial: breakeven, then trail behind the last 5 bars' extreme. Effective from the next day."""
+    if not partial_done:
+        return stop
+    if direction == LONG:
+        return max(v for v in (stop, entry, low5) if not math.isnan(v))
+    return min(v for v in (stop, entry, high5) if not math.isnan(v))
