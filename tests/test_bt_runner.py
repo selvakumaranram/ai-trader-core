@@ -139,3 +139,27 @@ def test_flags_and_scan_status_are_disclosed_in_the_summary(engine):
     assert not any("price-jump scan has not run" in w for w in warnings)
     assert any("1 look like unadjusted splits/bonuses" in w and "1 look like real moves" in w for w in warnings)
     assert [t["symbol"] for t in run["trades"]] == ["BRK"]
+
+
+def test_price_action_runs_end_to_end(engine):
+    series = {"NIFTY 50": flat(280, volume=0), "BRK": breakout_series()}
+    series.update({f"FL{i}": flat(280) for i in range(1, 5)})
+    seed(engine, series)
+    run_id = create_run(engine, BacktestRequest("price_action",
+                                                money=MoneyRules(risk_per_trade=300, daily_loss_limit=600)))
+    execute_run(engine, run_id)
+    with engine.connect() as conn:
+        run = repo.get_backtest_run(conn, run_id)
+    assert run["status"] == "ok", run["message"]
+    assert "index_signals" in run["summary"] and run["params"]["money"]["risk_per_trade"] == 300
+
+
+def test_missing_rbi_file_warns(engine, tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "RBI_DATES_PATH", tmp_path / "none.yaml")
+    seed(engine, {"NIFTY 50": flat(210, volume=0), "AAA": flat(210)})
+    run_id = create_run(engine, BacktestRequest("price_action"))
+    execute_run(engine, run_id)
+    with engine.connect() as conn:
+        run = repo.get_backtest_run(conn, run_id)
+    assert run["status"] == "ok", run["message"]
+    assert any("RBI policy dates missing" in w for w in run["summary"]["warnings"])

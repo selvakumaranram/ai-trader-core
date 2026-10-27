@@ -1,0 +1,76 @@
+# RBI monetary-policy announcement days (scheduled and off-cycle), used by strategy D to avoid new entries
+# on the announcement day and the session before it.
+# Source: rbi.org.in > Monetary Policy (Annualpolicy.aspx), every financial year 2016-17 to 2026-27, read on
+# 2026-10-27. Each date is the day the decision was announced; each entry links RBI's own press release.
+# Minutes, transcripts and press-conference recordings are not announcements and are excluded.
+# Add new announcements here as they happen and move covered_to forward; backtests outside the covered span warn.
+covered_from: 2016-04-01
+covered_to: 2026-10-27
+dates:
+  - {date: 2016-04-05, note: "First bi-monthly policy statement 2016-17 (Governor, before the MPC existed)", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=36654"}
+  - {date: 2016-06-07, note: "Second bi-monthly policy statement 2016-17 (Governor, before the MPC existed)", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=37151"}
+  - {date: 2016-08-09, note: "Third bi-monthly policy statement 2016-17 (Governor, before the MPC existed)", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=37734"}
+  - {date: 2016-10-04, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=38225"}
+  - {date: 2016-12-07, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=38819"}
+  - {date: 2017-02-08, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=39506"}
+  - {date: 2017-04-06, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=40069"}
+  - {date: 2017-06-07, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=40685"}
+  - {date: 2017-08-02, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=41256"}
+  - {date: 2017-10-04, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=41852"}
+  - {date: 2017-12-06, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=42476"}
+  - {date: 2018-02-07, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=43078"}
+  - {date: 2018-04-05, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=43573"}
+  - {date: 2018-06-06, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=44125"}
+  - {date: 2018-08-01, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=44638"}
+  - {date: 2018-10-05, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=45154"}
+  - {date: 2018-12-05, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=45659"}
+  - {date: 2019-02-07, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=46235"}
+  - {date: 2019-04-04, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=46722"}
+  - {date: 2019-06-06, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=47225"}
+  - {date: 2019-08-07, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=47818"}
+  - {date: 2019-10-04, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=48319"}
+  - {date: 2019-12-05, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=48802"}
+  - {date: 2020-02-06, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=49342"}
+  - {date: 2020-03-27, note: "MPC resolution (off-cycle)", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=49581"}
+  - {date: 2020-04-17, note: "Governor's statement (off-cycle)", source: "https://www.rbi.org.in/Scripts/bs_viewcontent.aspx?Id=3853"}
+  - {date: 2020-05-22, note: "MPC resolution (off-cycle)", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=49843"}
+  - {date: 2020-08-06, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=50174"}
+  - {date: 2020-10-09, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=50479"}
+  - {date: 2020-12-04, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=50746"}
+  - {date: 2021-02-05, note: "Resolution of the Monetary Policy Committee (MPC), Reserve Bank of India", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=51076"}
+  - {date: 2021-04-07, note: "Resolution of the Monetary Policy Committee (MPC) April 5-7, 2021", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=51380"}
+  - {date: 2021-05-05, note: "Governor's statement (off-cycle)", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=51526"}
+  - {date: 2021-06-04, note: "Resolution of the Monetary Policy Committee (MPC) June 2-4, 2021", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=51682"}
+  - {date: 2021-08-06, note: "Resolution of the Monetary Policy Committee (MPC) August 4-6, 2021", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=52008"}
+  - {date: 2021-10-08, note: "Resolution of the Monetary Policy Committee (MPC) October 6-8, 2021", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=52367"}
+  - {date: 2021-12-08, note: "Resolution of the Monetary Policy Committee (MPC) December 6-8, 2021", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=52686"}
+  - {date: 2022-02-10, note: "Resolution of the Monetary Policy Committee (MPC) February 8-10, 2022", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=53249"}
+  - {date: 2022-04-08, note: "Resolution of the Monetary Policy Committee (MPC) April 6-8, 2022", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=53535"}
+  - {date: 2022-05-04, note: "MPC resolution, May 2 and 4, 2022 (off-cycle)", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=53651"}
+  - {date: 2022-06-08, note: "Resolution of the Monetary Policy Committee (MPC) June 6-8, 2022", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=53833"}
+  - {date: 2022-08-05, note: "Resolution of the Monetary Policy Committee (MPC) August 3-5, 2022", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=54150"}
+  - {date: 2022-09-30, note: "Resolution of the Monetary Policy Committee (MPC) September 28-30, 2022", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=54464"}
+  - {date: 2022-12-07, note: "Resolution of the Monetary Policy Committee (MPC) December 5-7, 2022", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=54817"}
+  - {date: 2023-02-08, note: "Resolution of the Monetary Policy Committee (MPC) February 6-8, 2023", source: "https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=55177"}
+  - {date: 2023-04-06, note: "Resolution of the Monetary Policy Committee (MPC) April 3, 5 and 6, 2023", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=55471"}
+  - {date: 2023-06-08, note: "Resolution of the Monetary Policy Committee (MPC) June 6-8, 2023", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=55816"}
+  - {date: 2023-08-10, note: "Resolution of the Monetary Policy Committee (MPC) August 8-10, 2023", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=56175"}
+  - {date: 2023-10-06, note: "Resolution of the Monetary Policy Committee (MPC) October 4 to 6, 2023", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=56501"}
+  - {date: 2023-12-08, note: "Resolution of the Monetary Policy Committee (MPC) December 6 to 8, 2023", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=56887"}
+  - {date: 2024-02-08, note: "Resolution of the Monetary Policy Committee (MPC) February 6 to 8, 2024", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=57277"}
+  - {date: 2024-04-05, note: "Resolution of the Monetary Policy Committee (MPC) April 3 to 5, 2024", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=57638"}
+  - {date: 2024-06-07, note: "Resolution of the Monetary Policy Committee (MPC) June 5 to 7, 2024", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=58049"}
+  - {date: 2024-08-08, note: "Resolution of the Monetary Policy Committee (MPC) August 6 to 8, 2024", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=58448"}
+  - {date: 2024-10-09, note: "Resolution of the Monetary Policy Committee (MPC) October 7 to 9, 2024", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=58851"}
+  - {date: 2024-12-06, note: "Resolution of the Monetary Policy Committee (MPC) December 4 to 6, 2024", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=59246"}
+  - {date: 2025-02-07, note: "Resolution of the Monetary Policy Committee (MPC) February 5 to 7, 2025", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=59694"}
+  - {date: 2025-04-09, note: "Resolution of the Monetary Policy Committee (MPC) April 7 to 9, 2025", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=60177"}
+  - {date: 2025-06-06, note: "Resolution of the Monetary Policy Committee (MPC) June 4 to 6, 2025", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=60605"}
+  - {date: 2025-08-06, note: "Resolution of the Monetary Policy Committee (MPC) August 4 to 6, 2025", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=60958"}
+  - {date: 2025-10-01, note: "Resolution of the Monetary Policy Committee (MPC) September 29 to October 1, 2025", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=61333"}
+  - {date: 2025-12-05, note: "Resolution of the Monetary Policy Committee (MPC) December 3 to 5, 2025", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=61750"}
+  - {date: 2026-02-06, note: "Resolution of the Monetary Policy Committee (MPC) February 4 to 6, 2026", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62170"}
+  - {date: 2026-04-08, note: "Resolution of the Monetary Policy Committee (MPC) April 6 to 8, 2026", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62515"}
+  - {date: 2026-06-05, note: "Resolution of the Monetary Policy Committee (MPC) June 3 to 5, 2026", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62864"}
+  - {date: 2026-08-05, note: "Resolution of the Monetary Policy Committee (MPC) August 3 to 5, 2026", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63288"}
+  - {date: 2026-10-07, note: "Resolution of the Monetary Policy Committee (MPC) October 5 to 7, 2026", source: "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63744"}

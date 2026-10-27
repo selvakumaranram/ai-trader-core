@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import date
-from typing import Optional, Tuple
+from pathlib import Path
+from typing import Optional, Set, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
@@ -11,11 +12,13 @@ from sqlalchemy.engine import Connection, Engine
 from aitrader.backtest.bars import load_market
 from aitrader.backtest.costs import CostModel
 from aitrader.backtest.engine import FLAG_LOOKBACK, simulate
+from aitrader.backtest.events import blocked_entry_days, load_rbi_dates
 from aitrader.backtest.index_signals import index_signals, index_summary
 from aitrader.backtest.indicators import MIN_BARS, MIN_TRADED_VALUE, add_indicators
 from aitrader.backtest.metrics import benchmark_curve, clean_json, summarize
 from aitrader.backtest.strategies import INDEX_STRATEGIES, STRATEGIES
 from aitrader.backtest.strategies.breakout import Breakout
+from aitrader.backtest.strategies.price_action import PriceAction
 from aitrader.backtest.strategies.pullback import Pullback
 from aitrader.backtest.types import IndexSignal, MoneyRules, Trade
 from aitrader.db import repo
@@ -27,6 +30,7 @@ BENCHMARK = "NIFTY 50"
 UNSEEN_YEARS = 2
 NO_DATA = "Load the stock list and price history first (Data tab)"
 INTERRUPTED = "interrupted (service restarted)"
+RBI_DATES_PATH: Optional[Path] = None  # None = the shipped aitrader/data/rbi_policy_dates.yaml
 _LOCK_KEY = 72_026_102  # pg advisory lock: one backtest creation at a time
 
 
@@ -148,6 +152,23 @@ def _data_warnings(data_flags: list, scanned_at, ingested_at) -> list:
     return out
 
 
+def _event_days(strategy_key: str, days, start: date, end: date) -> Tuple[Set[date], Optional[str]]:
+    """Strategy D's RBI-day entry blocks, plus a warning when the dates file doesn't cover the run."""
+    if strategy_key != "price_action":
+        return set(), None
+    dates, covered_from, covered_to = load_rbi_dates(RBI_DATES_PATH)
+    blocked = blocked_entry_days(dates, [d.date() for d in days])
+    if covered_from is None:
+        return blocked, f"RBI policy dates missing for {start}–{end}; event filter off"
+    gaps = []
+    if start < covered_from:
+        gaps.append(f"{start}–{covered_from}")
+    if end > covered_to:
+        gaps.append(f"{covered_to}–{end}")
+    warning = f"RBI policy dates missing for {', '.join(gaps)}; event filter partly off" if gaps else None
+    return blocked, warning
+
+
 def _execute(engine: Engine, run_id: int) -> None:
     with engine.connect() as conn:
         run = repo.backtest_run_row(conn, run_id)
@@ -161,7 +182,10 @@ def _execute(engine: Engine, run_id: int) -> None:
         raise _NoData
     nifty = market.indices[BENCHMARK]
     days = [d for d in nifty.index if start <= d.date() <= end]
-    frames = {s: add_indicators(f) for s, f in market.stocks.items()}
+    strategy = STRATEGIES[run["strategy"]]()
+    prepare = getattr(strategy, "prepare", lambda df: df)
+    frames = {s: prepare(add_indicators(f)) for s, f in market.stocks.items()}
+    blocked, rbi_warning = _event_days(run["strategy"], days, start, end)
     with engine.connect() as conn:
         flag_rows = [f for f in repo.history_jump_flags(conn) if f["symbol"] in market.stocks]
         scanned_at = repo.last_finished_run_at(conn, "scan_history")
@@ -172,14 +196,19 @@ def _execute(engine: Engine, run_id: int) -> None:
     for f in flag_rows:
         if f["check_name"] == "history_adjustment":
             flags.setdefault(f["symbol"], set()).add(f["trade_date"])
-    sim = simulate(frames, days, STRATEGIES[run["strategy"]](), money, costs, data_flags=flags)
+    sim = simulate(frames, days, strategy, money, costs, data_flags=flags, blocked_entry_days=blocked)
     bench = benchmark_curve(nifty["close"], days, money.capital)
     summary = summarize(sim, bench, money, unseen_from)
     signals = []
     if run["strategy"] in INDEX_STRATEGIES:
-        idx_strategy = Breakout(use_volume=False) if run["strategy"] == "breakout" else Pullback()
+        idx_strategy = {"breakout": lambda: Breakout(use_volume=False),
+                        "price_action": lambda: PriceAction(use_volume=False)}.get(run["strategy"], Pullback)()
+        idx_prepare = getattr(idx_strategy, "prepare", lambda df: df)
         for symbol, f in sorted(market.indices.items()):
-            signals += index_signals(add_indicators(f), symbol, days, idx_strategy, money)
+            signals += index_signals(idx_prepare(add_indicators(f)), symbol, days, idx_strategy, money,
+                                     blocked_entry_days=blocked)
+    if rbi_warning:
+        summary["warnings"].append(rbi_warning)
     summary["index_signals"] = index_summary(signals, unseen_from)
     summary["data_flags"] = [
         {"symbol": f["symbol"], "date": f["trade_date"].isoformat(),
