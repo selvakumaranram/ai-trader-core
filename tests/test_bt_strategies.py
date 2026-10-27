@@ -100,4 +100,4 @@ def test_momentum_requires_close_above_sma50_and_complete_data():
 def test_empty_rows_and_registry():
     empty = pd.DataFrame()
     assert all(cls().candidates(DAY, empty) == [] for cls in STRATEGIES.values())
-    assert set(STRATEGIES) == {"momentum", "pullback", "breakout"}
+    assert set(STRATEGIES) == {"momentum", "pullback", "breakout", "price_action"}
