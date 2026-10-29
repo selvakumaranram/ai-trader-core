@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Collection, Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import delete, func, literal_column, select, tuple_, update
@@ -419,6 +419,12 @@ def corporate_actions_of(conn: Connection, instrument_id: int) -> List[Corporate
 def last_finished_run_at(conn: Connection, job: str, statuses: Collection[str] = ("ok",)):
     return conn.execute(select(func.max(ingestion_runs.c.finished_at))
                         .where(ingestion_runs.c.job == job, ingestion_runs.c.status.in_(list(statuses)))).scalar()
+
+
+def run_statuses_since(conn: Connection, job: str, run_date: date, since: datetime) -> List[str]:
+    return list(conn.execute(select(ingestion_runs.c.status).where(
+        ingestion_runs.c.job == job, ingestion_runs.c.run_date == run_date,
+        ingestion_runs.c.started_at >= since)).scalars())
 
 
 def latest_bar_ingested_at(conn: Connection, source: str):
