@@ -256,6 +256,7 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 skips["regime_off"] += len(blocked_longs)
                 pending = [c for c in pending if c.direction != LONG]
 
+    skips.update(getattr(strategy, "skips", {}))  # signals a strategy filtered itself (e.g. B2's weaker_than_nifty)
     return SimResult(trades, equity, dict(skips), dict(notes), guard.finish(last) if guard else [])
 
 

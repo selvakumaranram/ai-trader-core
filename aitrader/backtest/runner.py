@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
@@ -28,6 +29,7 @@ log = logging.getLogger(__name__)
 SOURCE = "yfinance"
 BENCHMARK = "NIFTY 50"
 UNSEEN_YEARS = 2
+REGIME_SMA = 200
 NO_DATA = "Load the stock list and price history first (Data tab)"
 INTERRUPTED = "interrupted (service restarted)"
 RBI_DATES_PATH: Optional[Path] = None  # None = the shipped aitrader/data/rbi_policy_dates.yaml
@@ -69,6 +71,14 @@ def validate(req: BacktestRequest) -> None:
         raise BacktestInputError("Money settings must be positive and allow at least one position")
     if m.risk_per_trade > m.capital:
         raise BacktestInputError("Risk per trade cannot exceed starting capital")
+    if m.risk_mode not in ("fixed", "percent"):
+        raise BacktestInputError("Risk mode must be 'fixed' or 'percent'")
+    for label, v in (("Risk %", m.risk_pct), ("Daily loss %", m.daily_loss_pct),
+                     ("Drawdown pause", m.max_drawdown_pause), ("Max charges ÷ risk", m.max_charge_to_risk)):
+        if v is not None and not 0 < v < 1:
+            raise BacktestInputError(f"{label} must be between 0 and 1 (e.g. 0.01 for 1%)")
+    if m.pause_min_days < 0:
+        raise BacktestInputError("Pause days cannot be negative")
     if req.start and req.end and req.end <= req.start:
         raise BacktestInputError("End date must be after the start date")
 
@@ -121,10 +131,17 @@ def _fail(engine: Engine, run_id: int, message: str) -> None:
         repo.finish_backtest_run(conn, run_id, status="failed", message=message)
 
 
+def regime_by_day(nifty_close) -> dict:
+    """NIFTY 50 above its 200-day simple average of closes, by date (days without 200 closes yet are absent)."""
+    sma200 = nifty_close.rolling(REGIME_SMA, min_periods=REGIME_SMA).mean()
+    return {d.date(): bool(c > s) for d, c, s in zip(nifty_close.index, nifty_close, sma200) if s == s}
+
+
 def _trade_row(t: Trade, ids: dict, unseen_from: date) -> dict:
     return dict(instrument_id=ids.get(t.symbol), symbol=t.symbol, signal_date=t.signal_date,
                 entry_date=t.entry_date, entry_price=float(t.entry_price), shares=int(t.shares), stop=float(t.stop),
-                target=float(t.target), exit_date=t.exit_date, exit_price=float(t.exit_price),
+                target=float(t.target) if math.isfinite(t.target) else None, exit_date=t.exit_date,
+                exit_price=float(t.exit_price),
                 exit_reason=t.exit_reason, charges=float(t.charges), pnl=float(t.pnl),
                 r_multiple=float(t.r_multiple), reason=t.reason, facts=clean_json(t.facts),
                 period="unseen" if t.entry_date >= unseen_from else "earlier")
@@ -196,7 +213,12 @@ def _execute(engine: Engine, run_id: int) -> None:
     for f in flag_rows:
         if f["check_name"] == "history_adjustment":
             flags.setdefault(f["symbol"], set()).add(f["trade_date"])
-    sim = simulate(frames, days, strategy, money, costs, data_flags=flags, blocked_entry_days=blocked)
+    nifty_close = nifty["close"]
+    if hasattr(strategy, "nifty_ret126"):  # B2's relative-strength filter
+        ret126 = nifty_close / nifty_close.shift(126) - 1
+        strategy.nifty_ret126 = {d.date(): float(v) for d, v in ret126.dropna().items()}
+    sim = simulate(frames, days, strategy, money, costs, data_flags=flags, blocked_entry_days=blocked,
+                   regime=regime_by_day(nifty_close))
     bench = benchmark_curve(nifty["close"], days, money.capital)
     summary = summarize(sim, bench, money, unseen_from)
     signals = []

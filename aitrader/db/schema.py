@@ -192,7 +192,7 @@ backtest_trades = Table(
     Column("entry_price", PRICE, nullable=False),
     Column("shares", Integer, nullable=False),
     Column("stop", PRICE, nullable=False),
-    Column("target", PRICE, nullable=False),
+    Column("target", PRICE),  # NULL: no fixed target (strategy A2)
     Column("exit_date", Date, nullable=False),
     Column("exit_price", PRICE, nullable=False),
     Column("exit_reason", String(20), nullable=False),
