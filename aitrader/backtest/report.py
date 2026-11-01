@@ -6,8 +6,11 @@ import io
 from collections import Counter
 from typing import Callable, List
 
+from aitrader.backtest import analysis
+
 NAMES = {"momentum": "A — Momentum", "pullback": "B — Trend pullback", "breakout": "C — Breakout",
-         "price_action": "D — Price action"}
+         "price_action": "D — Price action", "momentum_a2": "A2 — Medium-term momentum",
+         "pullback_b2": "B2 — Trend pullback, volatility-based stop"}
 
 RULES = {
     "pullback": """\
@@ -69,6 +72,44 @@ nearest resistance is less than 2R away; no new entries on RBI policy-announceme
 the lowest low of the last 5 days; anything left is sold after 30 trading days.
 **Default risk:** ₹300 per trade and a ₹600 daily loss stop (1.5% / 3% of ₹20,000).
 **Ranking for free slots:** most room to the next level first (capped at 5R), retests before pullbacks.""",
+    "momentum_a2": """\
+**Idea:** hold the stocks that have been strongest over the last 6–12 months (ignoring the most recent month,
+which tends to reverse), and let winners run with a trailing stop instead of a fixed target.
+
+**Eligible:** at least 260 trading days of history, close above both its 50- and 200-day averages, and a 50-day
+average traded value (close × volume) of at least ₹10 crore.
+
+**Score** (percentile rank 0–100 across eligible stocks, weighted): 6-month return skipping the latest month,
+close[t−21] ÷ close[t−126] − 1 (weight 50); 12-month return skipping the latest month, close[t−21] ÷
+close[t−252] − 1 (30); that 6-month return ÷ the standard deviation of daily returns over 126 days (20).
+No 1-, 3- or 5-day returns and no RSI.
+
+**When:** signals only on the **last trading day of each week**; candidates are the top 10, and free slots are
+filled in score order. **Stop:** entry − 2.5 × ATR(14).
+**Ranking for free slots:** highest score first.""",
+    "pullback_b2": """\
+**Idea:** strategy B's pullback entry, with a stop sized to the stock's normal daily movement and a filter for
+stocks stronger than the market.
+
+A stock becomes a candidate at the day's close when **all** of these are true:
+1. **Uptrend:** close > 50-day average > 200-day average.
+2. **Pullback:** the day's low came within 1% of the 20-day average, or dipped below it.
+3. **Bounce:** the close is back above the 20-day average, and it is a green candle (close > open).
+4. **Stronger than the market:** the stock's 126-day return is greater than NIFTY 50's 126-day return that day.
+
+**Stop:** the lower of the last 3 days' lowest low and (close − 1.5 × ATR(14)), so it is never closer than
+1.5 ATR. **At entry** (next day's open, the actual price): skipped unless entry − stop is between 1 × and 3 ×
+ATR(14). There is no fixed 1–8% band.
+**Ranking for free slots:** stronger trend first, measured as (50-day avg − 200-day avg) ÷ 200-day avg.""",
+}
+
+SKIP_NOTES = {
+    "regime_off": "NIFTY 50 closed at or below its 200-day average on the signal day (long entries only)",
+    "charges_too_high": "estimated round-trip charges + slippage were more than the allowed share of the rupees "
+                        "risked",
+    "drawdown_pause": "equity was too far below its peak (new entries paused)",
+    "stop_distance_at_entry": "entry − stop at the actual entry price was outside 1–3 × ATR",
+    "weaker_than_nifty": "the stock's 126-day return did not beat NIFTY 50's",
 }
 
 QUESTIONS = [
@@ -141,11 +182,23 @@ def report_markdown(run: dict) -> str:
     add("## 2. How every trade is executed (same for all strategies)\n")
     add("- Signals are decided **after the close** using only data up to that day; the trade is entered at the "
         "**next day's open** (no peeking ahead).")
+    percent = money.get("risk_mode") == "percent"
     add("- **Size:** shares = risk per trade ÷ (entry − stop), capped by the per-position limit and the cash "
-        "available. If cash can fund less than half the intended size, the trade is skipped.")
+        "available. If cash can fund less than half the intended size, the trade is skipped."
+        + (" Risk per trade is a percentage of equity (cash + open positions at the previous close)."
+           if percent else ""))
     strategy_params = (run.get("params") or {}).get("strategy") or {}
     is_d = run["strategy"] == "price_action"
-    if is_d:
+    is_a2 = run["strategy"] == "momentum_a2"
+    if is_a2:
+        add("- **No fixed target.** After each close the stop becomes max(previous stop, highest close since "
+            "entry − 3 × ATR(14)); it never moves down and applies from the next day.")
+        add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at "
+            "the stop (\"trail stop\" once it has risen above the initial stop); after 60 trading days → sell at "
+            "the close. **Rank exit:** on each weekly signal day, a held stock no longer in the top 30 by score "
+            "(or closing below its 200-day average) is sold at the next open — recorded as \"stop gap\" if that "
+            "open is already below the stop.")
+    elif is_d:
         add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at "
             "the stop; high touches entry + 1.5 × (entry − stop) → sell **half** there, then the rest gets a "
             "breakeven stop from the next day and trails below the lowest low of the last 5 days; **if the stop "
@@ -158,18 +211,45 @@ def report_markdown(run: dict) -> str:
             "the stop; high touches the target → sell at the target; **if both happen the same day it is counted "
             "as a loss** (daily candles can't show which came first); after 20 trading days → sell at the close.")
     add("- If closed losses in a day reach the daily loss limit, no new trades the next day.")
+    if money.get("regime_filter"):
+        add("- **Market regime filter:** no new long entries when NIFTY 50 closes at or below its 200-day average on "
+            "the signal day; open positions keep their normal exits.")
+    if money.get("max_charge_to_risk") is not None:
+        add(f"- **Charge check:** a trade is skipped when its estimated round-trip charges + slippage (buy and sell "
+            f"at the entry price) exceed {pct(money['max_charge_to_risk'])} of the rupees risked.")
+    if money.get("max_drawdown_pause") is not None:
+        add(f"- **Drawdown pause:** when equity falls {pct(money['max_drawdown_pause'])} or more below its peak, new "
+            f"entries stop; they resume once at least {money.get('pause_min_days', 10)} trading days have passed "
+            "and NIFTY 50 is above its 200-day average, and the peak then resets to that day's equity.")
     add("- **Costs:** Zerodha delivery charges (STT 0.1% each side, exchange, SEBI, stamp duty, GST, DP charge "
         "per sale) plus slippage on every buy and sell.\n")
     add("| Money rule | Value |\n|---|---|")
-    for label, key, fmt in (("Starting capital", "capital", rupees), ("Risk per trade", "risk_per_trade", rupees),
-                            ("Daily loss stop", "daily_loss_limit", rupees),
-                            ("Max open positions", "max_positions", plain),
-                            ("Max money in one stock", "max_position_value", rupees)):
-        add(f"| {label} | {fmt(money.get(key))} |")
+    add(f"| Starting capital | {rupees(money.get('capital'))} |")
+    add(f"| Risk per trade | {pct(money.get('risk_pct')) + ' of equity' if percent else rupees(money.get('risk_per_trade'))} |")
+    daily_pct = money.get("daily_loss_pct")
+    add(f"| Daily loss stop | {pct(daily_pct) + ' of equity' if daily_pct else rupees(money.get('daily_loss_limit'))} |")
+    add(f"| Max open positions | {plain(money.get('max_positions'))} |")
+    add(f"| Max money in one stock | {rupees(money.get('max_position_value'))} |")
+    add(f"| Market regime filter (NIFTY 50 vs 200-day avg) | {'On' if money.get('regime_filter') else 'Off'} |")
+    charge = money.get("max_charge_to_risk")
+    add(f"| Max charges ÷ risk | {'Off' if charge is None else pct(charge)} |")
+    dd = money.get("max_drawdown_pause")
+    add(f"| Drawdown pause | {'Off' if dd is None else pct(dd) + ' below peak, min ' + plain(money.get('pause_min_days', 10)) + ' trading days'} |")
+    if is_a2:
+        add(f"| Initial stop (× ATR14) | {plain(strategy_params.get('stop_atr'))} |")
+        add(f"| Trailing stop (× ATR14 below highest close) | {plain(strategy_params.get('trail_atr'))} |")
+        add(f"| Candidates per week / keep if in top | {plain(strategy_params.get('top_n'))} / "
+            f"{plain(strategy_params.get('keep_top'))} |")
+        add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
+    elif run["strategy"] == "pullback_b2":
+        add(f"| Stop never closer than (× ATR14) | {plain(strategy_params.get('stop_atr'))} |")
+        add(f"| Stop distance at entry (× ATR14) | {plain(strategy_params.get('entry_min_atr'))}–"
+            f"{plain(strategy_params.get('entry_max_atr'))} |")
+        add(f"| Relative strength lookback (days) | {plain(strategy_params.get('rs_days'))} |")
     if is_d:
         add(f"| Partial profit at (× risk) | {plain(strategy_params.get('partial_r'))} |")
         add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
-    else:
+    elif not is_a2:  # A2's time stop is listed above; it has no target
         add(f"| Target (× risk) | {plain(money.get('reward_multiple'))} |")
         add(f"| Time stop (trading days) | {plain(money.get('time_stop_days'))} |")
     add("")
@@ -186,6 +266,7 @@ def report_markdown(run: dict) -> str:
     add("*R = profit or loss divided by the rupees risked on that trade ((entry − stop) × shares). "
         + ("−1R = stop hit before the partial; half sold at 1.5R then the rest out at breakeven ≈ +0.75R; all "
            "before charges and slippage.*\n" if is_d else
+           "−1R = the initial stop hit; there is no fixed target, so winners can run past +2R.*\n" if is_a2 else
            "+2R = target hit, −1R = stop hit, before charges and slippage.*\n"))
 
     add("### Minimum-evidence checklist (not a promise of profit)\n")
@@ -213,6 +294,7 @@ def report_markdown(run: dict) -> str:
         add(f"- Average rupees actually risked per trade: **{rupees(avg_risk)}**, so charges alone cost about "
             f"**{charges / len(trades) / avg_risk:.2f}R** per trade.")
     add("")
+    _edge_sections(add, L, trades, s)
 
     add("### By year\n\n| Year | Return | Biggest fall | Trades |\n|---|---|---|---|")
     L.extend(f"| {y['year']} | {pct(y['return_pct'])} | {pct(y['max_drawdown_pct'])} | {y['trades']} |"
@@ -226,10 +308,13 @@ def report_markdown(run: dict) -> str:
              for k, v in sorted((s.get("skips") or {}).items(), key=lambda kv: -kv[1]))
     add("\n*no slot = all positions already open; no cash = cash couldn't fund at least half the intended size; "
         "size zero = one share would exceed the per-position limit; data problem = a likely unadjusted split/bonus "
-        "in that stock within the previous ~300 days.*\n")
+        "in that stock within the previous ~300 days"
+        + "".join(f"; {k.replace('_', ' ')} = {v}" for k, v in SKIP_NOTES.items() if k in (s.get("skips") or {}))
+        + ".*\n")
 
     if s.get("index_signals"):
-        add("### NIFTY / BANKNIFTY signals — index signal quality in R, **not option profit**\n")
+        add("### NIFTY / BANKNIFTY signals — **not for trading, research only** (index signal quality in R, not "
+            "option profit)\n")
         add("| Index | Idea | Period | Signals | Win rate | Avg R |\n|---|---|---|---|---|---|")
         L.extend(f"| {r['symbol']} | {'Bullish (CE)' if r['direction'] == 'long' else 'Bearish (PE)'} | "
                  f"{r['period']} | {r['signals']} | {pct(r['win_rate'])} | {num(r['avg_r'])} |"
@@ -262,6 +347,50 @@ def report_markdown(run: dict) -> str:
     add(f"Files: `{file_stem(run)}-trades.csv` (every trade with its reason) and `{file_stem(run)}-equity.csv` "
         "(daily account value vs NIFTY 50).")
     return "\n".join(L) + "\n"
+
+
+def _edge_sections(add, L: List[str], trades: List[dict], s: dict) -> None:
+    """R before/after charges, stop distance, market regime, position size and drawdown pauses."""
+    periods = (("Earlier years", [t for t in trades if t["period"] == "earlier"]),
+               ("Unseen years", [t for t in trades if t["period"] == "unseen"]), ("Whole run", trades))
+    add("### R per trade: before charges, charges, after charges\n")
+    add("| | Trades | Gross R | Charges R | Net R |\n|---|---|---|---|---|")
+    for label, group in periods:
+        r = analysis.r_split(group)
+        add(f"| {label} | {r['trades']} | {num(r['gross_r'])} | {num(r['charges_r'])} | {num(r['net_r'])} |")
+    add("")
+
+    add("### By stop distance (measured from the actual entry price)\n")
+    add("| Stop distance | Period | Trades | Avg position | Avg ₹ risked | Win rate | Gross R | Charges R | Net R |\n"
+        "|---|---|---|---|---|---|---|---|---|")
+    L.extend(f"| {r['bucket']} | {r['period']} | {r['trades']} | {rupees(r['avg_position_value'])} | "
+             f"{rupees(r['avg_risk'])} | {pct(r['win_rate'])} | {num(r['gross_r'])} | {num(r['charges_r'])} | "
+             f"{num(r['net_r'])} |" for r in analysis.stop_distance_table(trades))
+    add("")
+
+    add("### By market regime on the signal day (NIFTY 50 vs its 200-day average)\n")
+    add("| Period | NIFTY 50 | Trades | Win rate | Avg R | ₹ P&L |\n|---|---|---|---|---|---|")
+    L.extend(f"| {r['period']} | {r['regime']} | {r['trades']} | {pct(r['win_rate'])} | {num(r['avg_r'])} | "
+             f"{rupees(r['pnl'])} |" for r in analysis.regime_table(trades))
+    add("\n*\"unknown\" = trades from runs made before this was recorded.*\n")
+
+    size = analysis.sizing(trades)
+    add("### Position size\n")
+    add(f"- Average position value: **{rupees(size['avg_position_value'])}**")
+    add(f"- Trades cut below the intended risk: **{pct(size['pct_cut'])}** ({size['cut_by_cap']} by the "
+        f"per-stock cap, {size['cut_by_cash']} by the cash available)\n")
+
+    pauses = s.get("drawdown_pauses") or []
+    if pauses:
+        skipped = (s.get("skips") or {}).get("drawdown_pause", 0)
+        days = sum(p.get("days_paused") or 0 for p in pauses)
+        add("### Drawdown pauses\n")
+        add(f"{len(pauses)} pause(s), {days} trading days paused in total, {skipped} signals skipped.\n")
+        add("| Paused at close of | Equity then | Resumed at close of | Equity then | Trading days paused |\n"
+            "|---|---|---|---|---|")
+        L.extend(f"| {p['start_date']} | {rupees(p['equity_at_pause'])} | {p.get('resume_date') or 'still paused'} "
+                 f"| {rupees(p.get('equity_at_resume'))} | {plain(p.get('days_paused'))} |" for p in pauses)
+        add("")
 
 
 def _csv(header: List[str], rows, cell: Callable) -> str:

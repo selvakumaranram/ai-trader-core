@@ -37,8 +37,23 @@ def test_run_lifecycle_without_data(engine):
 def test_bad_input_is_400(engine):
     c = client(engine)
     assert c.post("/local/backtests", json={"strategy": "magic"}).status_code == 400
-    assert c.post("/local/backtests", json={"strategy": "pullback", "risk_per_trade": 50000}).status_code == 400
+    assert c.post("/local/backtests", json={"strategy": "pullback", "risk_per_trade": 200000}).status_code == 400
+    assert c.post("/local/backtests", json={"strategy": "pullback", "risk_pct": 1.0}).status_code == 400  # 100%
+    assert c.post("/local/backtests", json={"strategy": "pullback", "risk_mode": "kelly"}).status_code == 400
     assert c.post("/local/backtests", json={"strategy": "pullback", "capital": "lots"}).status_code == 422
+
+
+def test_new_runs_default_to_the_new_money_settings_and_old_settings_can_be_sent(engine):
+    from aitrader.backtest.types import NEW_RUN_MONEY, MoneyRules
+    from dataclasses import asdict
+    c = client(engine)
+    new_id = c.post("/local/backtests", json={"strategy": "momentum_a2"}).json()["id"]
+    old_id = c.post("/local/backtests", json={"strategy": "momentum", **asdict(MoneyRules())}).json()["id"]
+    with engine.connect() as conn:
+        new = repo.backtest_run_row(conn, new_id)["params"]["money"]
+        old = repo.backtest_run_row(conn, old_id)["params"]["money"]
+    assert new == asdict(NEW_RUN_MONEY) and old == asdict(MoneyRules())
+    assert new["regime_filter"] is True and old["regime_filter"] is False and old["max_drawdown_pause"] is None
 
 
 def test_second_run_is_409(engine):

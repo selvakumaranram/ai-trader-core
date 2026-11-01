@@ -183,6 +183,7 @@ def summarize(sim, benchmark: List[float], money: MoneyRules, unseen_from: date)
         "loss_streaks": {"whole": loss_streak_alerts(sim.trades), "unseen": loss_streak_alerts(unseen_trades)},
         "skips": dict(sim.skips),
         "notes": dict(sim.notes),
+        "drawdown_pauses": list(getattr(sim, "pauses", [])),
         "warnings": list(WARNINGS),
     }
 

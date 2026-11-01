@@ -8,6 +8,7 @@ from aitrader.api import create_app
 from aitrader.auth import IST
 from aitrader.backtest.report import equity_csv, report_markdown, trades_csv
 from aitrader.backtest.runner import BacktestRequest, create_run, execute_run
+from aitrader.backtest.types import MoneyRules
 from aitrader.calendar import TradingCalendar
 from aitrader.db import repo
 from aitrader.jobs import JobDeps
@@ -113,3 +114,59 @@ def test_price_action_report_never_states_the_fixed_2r_exit(engine):
     assert "after 20 trading days" not in md and "+2R = target hit" not in md
     assert "| Target (× risk) | 2 |" not in md and "| Time stop (trading days) | 20 |" not in md
     assert "| Time stop (trading days) | 30 |" in md and "| Partial profit at (× risk) | 1.5 |" in md
+
+
+def strategy_run(engine, strategy, money=None):
+    from aitrader.backtest.types import NEW_RUN_MONEY
+    series = {"NIFTY 50": flat(280, volume=0), "BRK": breakout_series()}
+    series.update({f"FL{i}": flat(280) for i in range(1, 5)})
+    seed(engine, series)
+    run_id = create_run(engine, BacktestRequest(strategy, money=money or NEW_RUN_MONEY))
+    execute_run(engine, run_id)
+    with engine.connect() as conn:
+        return repo.get_backtest_run(conn, run_id)
+
+
+def test_report_shows_new_money_rules_and_edge_tables(engine):
+    run = strategy_run(engine, "breakout")
+    assert run["status"] == "ok"
+    run["summary"]["drawdown_pauses"] = [{"start_date": "2025-01-02", "resume_date": "2025-01-20",
+                                          "equity_at_pause": 85000.0, "equity_at_resume": 86000.0,
+                                          "days_paused": 12}]
+    run["summary"]["skips"] = {"regime_off": 4, "drawdown_pause": 2, "charges_too_high": 1}
+    md = report_markdown(run)
+    for text in ("| Risk per trade | 1.0% of equity |", "| Daily loss stop | 3.0% of equity |",
+                 "| Market regime filter (NIFTY 50 vs 200-day avg) | On |", "| Max charges ÷ risk | 5.0% |",
+                 "| Drawdown pause | 15.0% below peak, min 10 trading days |", "Gross R | Charges R | Net R",
+                 "By stop distance (measured from the actual entry price)", "By market regime on the signal day",
+                 "Trades cut below the intended risk", "1 pause(s), 12 trading days paused in total, 2 signals",
+                 "regime off = NIFTY 50 closed at or below its 200-day average", "Survivorship bias",
+                 "not a promise of future profit"):
+        assert text in md, text
+
+
+def test_old_settings_report_says_off(engine):
+    md = report_markdown(strategy_run(engine, "breakout", money=MoneyRules()))
+    assert "| Risk per trade | ₹400 |" in md and "| Market regime filter (NIFTY 50 vs 200-day avg) | Off |" in md
+    assert "| Max charges ÷ risk | Off |" in md and "| Drawdown pause | Off |" in md
+
+
+def test_a2_and_b2_run_end_to_end_and_explain_their_rules(engine):
+    a2 = strategy_run(engine, "momentum_a2")
+    assert a2["status"] == "ok", a2["message"]
+    md = report_markdown(a2)
+    for text in ("A2 — Medium-term momentum", "close[t−21] ÷ close[t−126]", "Rank exit", "No fixed target",
+                 "| Trailing stop (× ATR14 below highest close) | 3.0 |", "| Time stop (trading days) | 60 |"):
+        assert text in md, text
+    assert "+2R = target hit" not in md and "| Target (× risk) |" not in md
+
+
+def test_b2_report_marks_index_signals_research_only(engine):
+    b2 = strategy_run(engine, "pullback_b2")
+    assert b2["status"] == "ok", b2["message"]
+    b2["summary"]["index_signals"] = [{"symbol": "NIFTY 50", "direction": "long", "period": "earlier",
+                                       "signals": 3, "win_rate": 0.33, "avg_r": 0.1}]
+    md = report_markdown(b2)
+    for text in ("B2 — Trend pullback, volatility-based stop", "1.5 × ATR(14)", "126-day return",
+                 "not for trading, research only", "| Stop distance at entry (× ATR14) | 1.0–3.0 |"):
+        assert text in md, text

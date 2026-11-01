@@ -14,7 +14,7 @@ from aitrader.backtest.report import equity_csv, file_stem, report_markdown, tra
 from aitrader.backtest.runner import (
     INTERRUPTED, SOURCE, BacktestBusyError, BacktestInputError, BacktestRequest, create_run, execute_run,
 )
-from aitrader.backtest.types import MoneyRules
+from aitrader.backtest.types import NEW_RUN_MONEY, MoneyRules
 from aitrader.db import repo
 from aitrader.jobs import JOB_NAMES, JobDeps, run_job
 from aitrader.kite.gateway import KiteAuthError, KiteGateway
@@ -22,7 +22,7 @@ from aitrader.kite.gateway import KiteAuthError, KiteGateway
 STATE_TTL_SECONDS = 600
 NOT_CONFIGURED = "Kite is not configured: set KITE_API_KEY, KITE_API_SECRET and TOKEN_ENCRYPTION_KEY in .env"
 
-_DEFAULT_MONEY = MoneyRules()
+_DEFAULT_MONEY = NEW_RUN_MONEY
 
 
 class BacktestBody(BaseModel):
@@ -34,6 +34,13 @@ class BacktestBody(BaseModel):
     daily_loss_limit: float = _DEFAULT_MONEY.daily_loss_limit
     max_positions: int = _DEFAULT_MONEY.max_positions
     max_position_value: float = _DEFAULT_MONEY.max_position_value
+    risk_mode: str = _DEFAULT_MONEY.risk_mode
+    risk_pct: float = _DEFAULT_MONEY.risk_pct
+    daily_loss_pct: Optional[float] = _DEFAULT_MONEY.daily_loss_pct
+    regime_filter: bool = _DEFAULT_MONEY.regime_filter
+    max_charge_to_risk: Optional[float] = _DEFAULT_MONEY.max_charge_to_risk
+    max_drawdown_pause: Optional[float] = _DEFAULT_MONEY.max_drawdown_pause
+    pause_min_days: int = _DEFAULT_MONEY.pause_min_days
 
 
 def create_app(*, deps: JobDeps, sessions: Optional[SessionStore],
@@ -108,9 +115,7 @@ def create_app(*, deps: JobDeps, sessions: Optional[SessionStore],
 
     @app.post("/local/backtests", status_code=202)
     def start_backtest(body: BacktestBody, background: BackgroundTasks):
-        money = MoneyRules(capital=body.capital, risk_per_trade=body.risk_per_trade,
-                           daily_loss_limit=body.daily_loss_limit, max_positions=body.max_positions,
-                           max_position_value=body.max_position_value)
+        money = MoneyRules(**body.model_dump(exclude={"strategy", "start", "end"}))
         try:
             run_id = create_run(deps.engine, BacktestRequest(body.strategy, body.start, body.end, money))
         except BacktestInputError as exc:
