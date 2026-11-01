@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Optional
 
 LONG, SHORT = "long", "short"
 
@@ -27,6 +28,20 @@ class MoneyRules:
     max_position_value: float = 7_000.0
     reward_multiple: float = 2.0
     time_stop_days: int = 20
+    # Defaults keep the original behaviour so stored params of old runs reproduce exactly; NEW_RUN_MONEY holds
+    # the defaults for new runs.
+    risk_mode: str = "fixed"  # "fixed": risk_per_trade ₹; "percent": risk_pct × equity at the previous close
+    risk_pct: float = 0.01
+    daily_loss_pct: Optional[float] = None  # set: daily loss stop = this × equity at the previous close
+    regime_filter: bool = False  # no new long entries when NIFTY 50 closes at or below its 200-day average
+    max_charge_to_risk: Optional[float] = None  # skip when estimated round-trip charges ÷ ₹ risked exceed this
+    max_drawdown_pause: Optional[float] = None  # stop new entries this far below peak equity
+    pause_min_days: int = 10
+
+
+NEW_RUN_MONEY = MoneyRules(capital=100_000.0, risk_per_trade=1_000.0, daily_loss_limit=3_000.0, max_positions=5,
+                           max_position_value=25_000.0, risk_mode="percent", risk_pct=0.01, daily_loss_pct=0.03,
+                           regime_filter=True, max_charge_to_risk=0.05, max_drawdown_pause=0.15)
 
 
 @dataclass

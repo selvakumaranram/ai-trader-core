@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from typing import Optional, Tuple
+from datetime import date
+from typing import List, Optional, Sequence, Set, Tuple
 
 from aitrader.backtest.types import LONG, MoneyRules
 
@@ -54,12 +55,67 @@ def exit_check(direction: str, bar: Bar4, stop: float, target: float, *, entry_d
     return None
 
 
-def size_position(fill: float, stop: float, money: MoneyRules) -> int:
+def size_position(fill: float, stop: float, money: MoneyRules, risk: Optional[float] = None) -> int:
     risk_per_share = fill - stop
     if risk_per_share <= 0:
         return 0
-    return max(0, min(math.floor(money.risk_per_trade / risk_per_share),
+    return max(0, min(risk_shares(fill, stop, money.risk_per_trade if risk is None else risk),
                       math.floor(money.max_position_value / fill)))
+
+
+def risk_shares(fill: float, stop: float, risk: float) -> int:
+    """Shares the risk amount alone would buy, before the position cap and cash."""
+    return max(0, math.floor(risk / (fill - stop))) if fill > stop else 0
+
+
+def round_trip_estimate(costs, shares: int, fill: float, open_: float) -> float:
+    """Charges + slippage for buying `shares` at `fill` and selling them back at today's open (an estimate)."""
+    sell_value = shares * open_ * (1 - costs.slippage)
+    return (costs.buy_charges(shares * fill) + costs.sell_charges(sell_value)
+            + shares * open_ * costs.slippage * 2)
+
+
+def atr_trail_stop(stop: float, highest_close: float, atr: float, multiple: float = 3.0) -> float:
+    """Strategy A2's trail: highest close since entry − multiple × ATR, never lower than the current stop."""
+    candidate = highest_close - multiple * atr
+    return stop if math.isnan(candidate) else max(stop, candidate)
+
+
+def week_end_days(days: Sequence) -> Set:
+    """The last trading day of each ISO week in `days` (a holiday Friday makes Thursday the week's end)."""
+    out = set()
+    for i, day in enumerate(days):
+        if i == len(days) - 1 or days[i + 1].isocalendar()[:2] != day.isocalendar()[:2]:
+            out.add(day)
+    return out
+
+
+class DrawdownGuard:
+    """Pause new entries when equity falls `limit` below its peak; resume once at least `min_days` trading days
+    have passed since the pause began and NIFTY 50 is above its 200-day average. The peak resets on resume."""
+
+    def __init__(self, limit: float, min_days: int, start_equity: float):
+        self.limit, self.min_days, self.peak = limit, min_days, start_equity
+        self.paused = False
+        self._since = 0
+        self.log: List[dict] = []
+
+    def update(self, i: int, day: date, equity: float, regime_on: bool) -> None:
+        if self.paused:
+            if i - self._since >= self.min_days and regime_on:
+                self.paused, self.peak = False, equity
+                self.log[-1].update(resume_date=day.isoformat(), equity_at_resume=equity, days_paused=i - self._since)
+            return
+        self.peak = max(self.peak, equity)
+        if equity <= self.peak * (1 - self.limit):
+            self.paused, self._since = True, i
+            self.log.append({"start_date": day.isoformat(), "resume_date": None, "equity_at_pause": equity,
+                             "equity_at_resume": None, "days_paused": None})
+
+    def finish(self, last_index: int) -> List[dict]:
+        if self.paused:
+            self.log[-1]["days_paused"] = last_index - self._since
+        return self.log
 
 
 def partial_trail_check(direction: str, bar: Bar4, *, stop: float, partial_level: float, partial_done: bool,
