@@ -49,7 +49,7 @@ class _Position:
     sold_charges: float = 0.0
     partial: Optional[dict] = None
     sizing: dict = field(default_factory=dict)
-    highest_close: float = 0.0
+    highest_close: float = 0.0  # highest close since entry (the entry day's close included, not the fill)
     rank_exit: bool = False  # set at a weekly signal day's close: sell at the next open
 
 
@@ -180,7 +180,6 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
             cash -= shares * fill + charges
             positions[cand.symbol] = _Position(
                 cand, d, fill, shares, planned_target(fill, cand.stop, reward), charges, fill, stop=cand.stop,
-                highest_close=fill,
                 sizing={"risk_amount": round(risk_amount, 2), "intended_shares": intended, "size_cut": cut,
                         "regime_on": regime_on(cand.signal_date)})
         pending = []

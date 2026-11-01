@@ -147,6 +147,17 @@ def test_trailing_stop_rises_with_closes_and_exits_as_trail_stop():
     assert t.exit_reason == "trail_stop" and t.exit_date == days[20].date() and t.stop == 95.0
 
 
+def test_trailing_stop_uses_closes_since_entry_not_the_entry_price():
+    # Gap-up entry at 110 that closes at 106: the trail must start from the 106 close, not the 110 fill.
+    rows_ = [FLAT] * 20 + [(110, 111, 105, 106, 1e6), (106, 107, 101, 106, 1e6)] + [(106, 107, 105, 106, 1e6)] * 2
+    frames, days = a2_frames(rows_)
+    friday1 = days[19]  # 20 warm-up days so ATR(14) exists
+    assert friday1.day_name() == "Friday"
+    s = WeeklyScripted({friday1: [cand(friday1, close=100.0, stop=90.0)]})
+    (t,) = simulate(frames, days, s, MoneyRules(max_position_value=20_000), COSTS).trades
+    assert t.exit_reason == "end_of_test"  # low 101 stays above 106 − 3 × ATR ≈ 98; 110 − 3 × ATR ≈ 102 would not
+
+
 # --- B2 ---------------------------------------------------------------------------------------------------------
 
 def b2(nifty_ret126=0.05):
