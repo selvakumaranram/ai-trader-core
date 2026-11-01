@@ -47,6 +47,22 @@ def summary(ret):
             "checklist": [{"passed": True}, {"passed": False}, {"passed": True}, {"passed": False}]}
 
 
+def ranked(trades, checks_passed, whole_exp, unseen_exp):
+    return {"summary": {"whole": {"trades": trades, "expectancy_r": whole_exp},
+                        "unseen": {"trades": 1, "expectancy_r": unseen_exp},
+                        "checklist": [{"passed": i < checks_passed} for i in range(4)]}}
+
+
+def test_best_run_ignores_tiny_samples_then_prefers_checklist_then_whole_expectancy():
+    from aitrader.backtest.analysis import best_run
+    rows = [("tiny", ranked(5, 4, 2.0, 0.9)),          # too few trades, however good it looks
+            ("one-unseen", ranked(40, 2, -0.16, 0.87)),  # great unseen R from a single trade
+            ("steady", ranked(300, 2, 0.07, -0.26)),
+            ("base", ranked(800, 1, 0.5, 0.5))]
+    assert best_run(rows)[0] == "steady"
+    assert best_run([("tiny", ranked(5, 4, 2.0, 0.9))])[0] == "tiny"  # nothing qualifies: fall back to all
+
+
 def test_comparison_has_a_row_per_run_and_earlier_and_unseen_tables():
     md = comparison_markdown([("A-base", {"summary": summary(-0.3)}), ("A2-100k", {"summary": summary(0.2)})])
     assert "## Earlier years" in md and "## Unseen years" in md

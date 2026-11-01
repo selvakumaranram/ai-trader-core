@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from aitrader.backtest.analysis import best_by_unseen_expectancy, comparison_markdown
+from aitrader.backtest.analysis import BEST_RULE, best_run, comparison_markdown
 from aitrader.backtest.report import equity_csv, file_stem, report_markdown, trades_csv
 from aitrader.backtest.runner import BacktestRequest, create_run, execute_run
 from aitrader.backtest.types import NEW_RUN_MONEY, MoneyRules
@@ -69,15 +69,20 @@ def run_study(deps: JobDeps, which: Sequence[str], out_dir: Path, start: Optiona
             log(f"  run #{run_id} done: {(run['summary']['whole'] or {}).get('trades')} trades")
             if ref_id:
                 checks.append(reproduction_line(label, run["summary"], ref_id, ref and ref["summary"]))
+    write_comparisons(out_dir, results, checks, log)
+    return results
 
+
+def write_comparisons(out_dir: Path, results: Dict[str, List[Tuple[str, dict]]], checks: Sequence[str],
+                      log: Callable[[str], None] = print) -> None:
     sections = []
     for key, rows in results.items():
         md = comparison_markdown(rows, f"Strategy {key.upper()} — comparison")
         (out_dir / f"comparison-{key.upper()}.md").write_text(md, encoding="utf-8")
         sections.append(md)
     if "a" in results and "b" in results:
-        best = [best_by_unseen_expectancy(results["a"]), best_by_unseen_expectancy(results["b"])]
-        sections.append(comparison_markdown(best, "Best A run vs best B run (highest unseen-period net expectancy)"))
+        best = [best_run(results["a"]), best_run(results["b"])]
+        sections.append(comparison_markdown(best, f"Best A run vs best B run ({BEST_RULE})"))
     if checks:
         sections.append("# Reproduction check\n\n" + "\n".join(f"- {c}" for c in checks) + "\n")
     combined = "\n".join(sections)
@@ -85,4 +90,3 @@ def run_study(deps: JobDeps, which: Sequence[str], out_dir: Path, start: Optiona
     log("")
     for line in combined.splitlines():
         log(line)
-    return results

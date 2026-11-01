@@ -123,9 +123,20 @@ def comparison_markdown(rows: Sequence[Tuple[str, dict]], title: str = "Comparis
     return "\n".join(out) + "\n"
 
 
-def best_by_unseen_expectancy(rows: Sequence[Tuple[str, dict]]) -> Optional[Tuple[str, dict]]:
-    """The run whose unseen-period net expectancy (R) is highest; runs without unseen trades rank last."""
+MIN_TRADES_FOR_BEST = 30
+BEST_RULE = (f"at least {MIN_TRADES_FOR_BEST} trades; most minimum-evidence checks passed; then highest whole-run "
+             "net expectancy")
+
+
+def best_run(rows: Sequence[Tuple[str, dict]]) -> Optional[Tuple[str, dict]]:
+    """Pick one run per strategy family by BEST_RULE (falls back to all runs when none has enough trades)."""
+    def trades(row):
+        return (row[1]["summary"].get("whole") or {}).get("trades") or 0
+
     def key(row):
-        e = (row[1]["summary"].get("unseen") or {}).get("expectancy_r")
-        return float("-inf") if e is None else e
-    return max(rows, key=key) if rows else None
+        s = row[1]["summary"]
+        e = (s.get("whole") or {}).get("expectancy_r")
+        return (sum(1 for c in s.get("checklist") or [] if c["passed"]), float("-inf") if e is None else e)
+
+    pool = [r for r in rows if trades(r) >= MIN_TRADES_FOR_BEST] or list(rows)
+    return max(pool, key=key) if pool else None
