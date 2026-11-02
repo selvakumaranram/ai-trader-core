@@ -269,3 +269,42 @@ def test_volatility_at_entry_is_the_signal_day_atr_over_close():
                                                                        "t", {})]}), MoneyRules(), COSTS)
     (t,) = res.trades
     assert t.facts["atr_pct"] == pytest.approx(float(df["atr14"].iloc[15]) / 100)
+
+
+
+# --- short-term regime filter, drawdown risk scaling --------------------------------------------------------------
+
+def test_risk_scaler_uses_a_never_resetting_peak_halves_below_ten_percent_restores_within_five():
+    from aitrader.backtest.rules import RiskScaler
+    r = RiskScaler()
+    for equity, factor in [(100, 1.0), (110, 1.0), (99.1, 1.0), (98.9, 0.5), (103, 0.5), (104.4, 0.5),
+                           (104.5, 1.0), (120, 1.0), (107.9, 0.5)]:
+        r.update(equity)
+        assert r.factor == factor, (equity, r.peak)
+    assert r.peak == 120
+
+
+def test_short_term_regime_blocks_a_long_entry_above_200_but_below_50_day_average():
+    days = list(prep([FLAT] * 4).index)
+    plan = {days[0]: [Candidate("AAA", LONG, days[0].date(), 100, 95, 1.0, "t", {})]}
+    regime = {days[0].date(): True}
+    regime50 = {days[0].date(): False}
+    res = simulate({"AAA": prep([FLAT] * 4)}, days, Scripted(plan),
+                   MoneyRules(regime_filter=True, regime_filter_short=True), COSTS, regime=regime, regime50=regime50)
+    assert res.trades == [] and res.skips == {"short_regime_off": 1}
+    res = simulate({"AAA": prep([FLAT] * 4)}, days, Scripted(plan), MoneyRules(regime_filter=True), COSTS,
+                   regime=regime, regime50=regime50)
+    (t,) = res.trades  # the short-term filter is off unless asked for
+    assert t.facts["nifty_above_sma50"] is False
+
+
+def test_dd_risk_scaling_halves_risk_after_a_ten_percent_fall_and_counts_the_days():
+    crash = [FLAT, (100, 101, 60, 60, 1e6)] + [(60, 61, 59, 60, 1e6)] * 4
+    money = MoneyRules(capital=10_000, risk_mode="percent", risk_pct=0.2, max_position_value=10_000,
+                       daily_loss_limit=1e9, dd_risk_scaling=True)  # big risk so the crash is a >10% fall
+    res, days = run({"AAA": prep(crash), "BBB": prep([FLAT] * 6)},
+                    {0: [("AAA", 100, 50, 1.0)], 2: [("BBB", 100, 95, 1.0)]}, money=money)
+    first, second = res.trades
+    equity_before = res.equity[2].equity  # entry on day 3 sizes from day 2's close
+    assert equity_before < 9_000 and second.facts["risk_amount"] == pytest.approx(0.1 * equity_before, abs=0.01)  # half of 20%
+    assert res.half_risk_days == 4  # days 2–5 start below −10% (the crash closes on day 1)

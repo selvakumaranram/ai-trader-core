@@ -78,8 +78,45 @@ def trade_stats(trades: Sequence[Trade]) -> dict:
         "profit_factor": sum(t.pnl for t in wins) / gross_loss if gross_loss > 0 else None,
         "total_charges": charges,
         "charges_pct_of_gross": charges / gross_before if gross_before > 0 else None,
+        "top5_share": _top5_share(ordered),
         "longest_losing_streak": longest_losing_streak([t.pnl for t in ordered]),
     }
+
+
+def _top5_share(trades: Sequence[Trade]) -> Optional[float]:
+    """The five stocks with the largest ₹ P&L, as a share of the total ₹ P&L (None when the total isn't positive)."""
+    by: dict = {}
+    for t in trades:
+        by[t.symbol] = by.get(t.symbol, 0.0) + t.pnl
+    total = sum(by.values())
+    return sum(sorted(by.values(), reverse=True)[:5]) / total if total > 0 else None
+
+
+DAYS_PER_MONTH = 30.44
+
+
+def drawdown_details(points: Sequence[EquityPoint], start_value: float) -> Optional[dict]:
+    """The biggest fall (peak date, trough date, recovery date or None) and the longest time below a previous peak."""
+    if not points:
+        return None
+    peak, peak_day = start_value, points[0].day
+    best = {"max_drawdown_pct": 0.0, "peak_date": None, "trough_date": None, "recovery_date": None}
+    worst_peak = None
+    longest = 0
+    for p in points:
+        if p.equity >= peak:
+            if worst_peak is not None and best["recovery_date"] is None and p.equity >= worst_peak:
+                best["recovery_date"] = p.day.isoformat()
+            longest = max(longest, (p.day - peak_day).days)
+            peak, peak_day = p.equity, p.day
+            continue
+        dd = 1 - p.equity / peak
+        if dd > best["max_drawdown_pct"]:
+            best.update(max_drawdown_pct=dd, peak_date=peak_day.isoformat(), trough_date=p.day.isoformat(),
+                        recovery_date=None)
+            worst_peak = peak
+    longest = max(longest, (points[-1].day - peak_day).days)
+    return {**best, "longest_underwater_months": longest / DAYS_PER_MONTH}
 
 
 def period_summary(points: Sequence[EquityPoint], trades: Sequence[Trade], start_value: float) -> Optional[dict]:
@@ -95,6 +132,7 @@ def period_summary(points: Sequence[EquityPoint], trades: Sequence[Trade], start
         "max_drawdown_pct": dd_pct,
         "max_drawdown_amount": dd_amt,
         "worst_month": worst_month(points, start_value),
+        "longest_underwater_months": drawdown_details(points, start_value)["longest_underwater_months"],
         "pct_days_invested": sum(1 for p in points if p.invested_value > 0) / len(points),
         **trade_stats(trades),
     }
@@ -206,6 +244,8 @@ def summarize(sim, benchmark: List[float], money: MoneyRules, unseen_from: date)
         "skips": dict(sim.skips),
         "notes": dict(sim.notes),
         "drawdown_pauses": list(getattr(sim, "pauses", [])),
+        "drawdown": drawdown_details(pts, money.capital),
+        "half_risk_days": getattr(sim, "half_risk_days", 0),
         "charge_check": charge_check_summary(sim.trades, getattr(sim, "charge_ratios_skipped", [])),
         "warnings": list(WARNINGS),
     }

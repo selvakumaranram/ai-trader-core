@@ -54,6 +54,7 @@ class BacktestRequest:
     start: Optional[date] = None
     end: Optional[date] = None
     money: MoneyRules = field(default_factory=MoneyRules)
+    exclude: Tuple[str, ...] = ()  # stocks left out of the universe (robustness checks)
 
 
 def _years_before(day: date, years: int) -> date:
@@ -102,7 +103,7 @@ def params_of(req: BacktestRequest) -> dict:
     return clean_json({"money": asdict(req.money), "costs": asdict(CostModel()),
                        "strategy": STRATEGIES[req.strategy].PARAMS,
                        "eligibility": {"min_bars": MIN_BARS, "min_traded_value": MIN_TRADED_VALUE},
-                       "unseen_years": UNSEEN_YEARS})
+                       "unseen_years": UNSEEN_YEARS, "exclude_symbols": sorted(req.exclude)})
 
 
 def create_run(engine: Engine, req: BacktestRequest) -> int:
@@ -134,13 +135,14 @@ def _fail(engine: Engine, run_id: int, message: str) -> None:
 def index_strategy_for(strategy_key: str):
     """The rules behind a run's NIFTY/BANKNIFTY research table: each family's original index rules."""
     return {"breakout": lambda: Breakout(use_volume=False), "breakout_c2": lambda: Breakout(use_volume=False),
+            "breakout_c3": lambda: Breakout(use_volume=False),
             "price_action": lambda: PriceAction(use_volume=False)}.get(strategy_key, Pullback)()
 
 
-def regime_by_day(nifty_close) -> dict:
-    """NIFTY 50 above its 200-day simple average of closes, by date (days without 200 closes yet are absent)."""
-    sma200 = nifty_close.rolling(REGIME_SMA, min_periods=REGIME_SMA).mean()
-    return {d.date(): bool(c > s) for d, c, s in zip(nifty_close.index, nifty_close, sma200) if s == s}
+def regime_by_day(nifty_close, window: int = REGIME_SMA) -> dict:
+    """NIFTY 50 above its `window`-day simple average of closes, by date (days without enough closes are absent)."""
+    sma = nifty_close.rolling(window, min_periods=window).mean()
+    return {d.date(): bool(c > s) for d, c, s in zip(nifty_close.index, nifty_close, sma) if s == s}
 
 
 def _trade_row(t: Trade, ids: dict, unseen_from: date) -> dict:
@@ -201,6 +203,8 @@ def _execute(engine: Engine, run_id: int) -> None:
     money = MoneyRules(**run["params"]["money"])
     costs = CostModel(**run["params"]["costs"])
     market = load_market(engine, SOURCE)
+    for symbol in run["params"].get("exclude_symbols") or ():
+        market.stocks.pop(symbol, None)
     if not market.stocks or BENCHMARK not in market.indices:
         raise _NoData
     nifty = market.indices[BENCHMARK]
@@ -224,7 +228,7 @@ def _execute(engine: Engine, run_id: int) -> None:
         ret126 = nifty_close / nifty_close.shift(126) - 1
         strategy.nifty_ret126 = {d.date(): float(v) for d, v in ret126.dropna().items()}
     sim = simulate(frames, days, strategy, money, costs, data_flags=flags, blocked_entry_days=blocked,
-                   regime=regime_by_day(nifty_close))
+                   regime=regime_by_day(nifty_close), regime50=regime_by_day(nifty_close, 50))
     bench = benchmark_curve(nifty["close"], days, money.capital)
     summary = summarize(sim, bench, money, unseen_from)
     signals = []

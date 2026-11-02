@@ -92,3 +92,37 @@ def test_study_b3_set_copies_run_36_settings(engine):
         small = study.resolve_money(conn, specs["B3-20k"], remap={36: run_id})
     assert base.max_charge_to_risk == 0.05 and c15.max_charge_to_risk == 0.15 and base.reentry_cooldown_days is None
     assert (small.capital, small.max_position_value, small.max_charge_to_risk) == (20_000, 7_000, 0.15)
+
+
+
+def test_exclude_top5_uses_the_earlier_period_only():
+    def tr(sym, pnl, period):
+        return {"symbol": sym, "pnl": pnl, "period": period}
+    run = {"trades": [tr("A", 900, "unseen"), tr("B", 500, "earlier"), tr("C", 400, "earlier"),
+                      tr("D", 300, "earlier"), tr("E", 200, "earlier"), tr("F", 100, "earlier"),
+                      tr("G", 50, "earlier"), tr("B", 100, "earlier")]}
+    assert study.top_earlier_symbols(run) == ["B", "C", "D", "E", "F"]  # A only made money in the unseen years
+
+
+def test_study_c3_set():
+    entries = study.STUDIES["c3"]
+    assert [(e[0], e[1]) for e in entries] == [
+        ("C-fix", "breakout"), ("C2-100k", "breakout_c2"), ("C3-100k", "breakout_c3"), ("C3-scaled", "breakout_c3"),
+        ("C3-half", "breakout_c3"), ("C3-20k", "breakout_c3"), ("C3-ex-top5", "breakout_c3")]
+    money = {e[0]: e[2] for e in entries}
+    assert money["C-fix"] == ("run", 51, {}) and entries[0][3] == 51
+    assert money["C3-scaled"].dd_risk_scaling is True and money["C3-100k"].dd_risk_scaling is False
+    assert money["C3-half"].risk_pct == 0.005 and money["C3-20k"].capital == 20_000
+    assert entries[-1][4] == {"exclude_top5_from": "C3-100k"}
+
+
+def test_runner_excludes_symbols(engine):
+    from aitrader.backtest.runner import BacktestRequest, create_run, execute_run
+    series = {"NIFTY 50": flat(280, volume=0), "BRK": breakout_series()}
+    series.update({f"FL{i}": flat(280) for i in range(1, 5)})
+    seed(engine, series)
+    run_id = create_run(engine, BacktestRequest("breakout", exclude=("BRK",)))
+    execute_run(engine, run_id)
+    with engine.connect() as conn:
+        run = repo.get_backtest_run(conn, run_id)
+    assert run["status"] == "ok" and run["trades"] == [] and run["params"]["exclude_symbols"] == ["BRK"]

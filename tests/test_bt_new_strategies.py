@@ -312,3 +312,29 @@ def test_b3_has_no_target_exit():
 
     (t,) = simulate({"AAA": df}, days, One(), MoneyRules(), COSTS).trades
     assert t.exit_reason == "end_of_test" and t.target == float("inf") and t.r_multiple > 2  # ran past 2R
+
+
+
+# --- C3 ---------------------------------------------------------------------------------------------------------
+
+def test_c3_stop_is_never_closer_than_one_and_a_half_atr_below_the_signal_close():
+    from aitrader.backtest.strategies.breakout_c3 import BreakoutC3
+    (c,) = BreakoutC3().candidates(DAY, rows(AAA=brk_row(close=104.0, high=104.5, atr14=2.0)))  # level 103
+    assert c.stop == pytest.approx(min(103.0 - 2.0, 104.0 - 3.0))  # 101: the 1.5-ATR floor wins
+    (c,) = BreakoutC3().candidates(DAY, rows(AAA=brk_row(close=108.0, high=108.5, atr14=2.0)))
+    assert c.stop == pytest.approx(101.0)  # the breakout-level stop is already further away
+    for close in (103.5, 104.0, 106.0, 110.0):
+        (c,) = BreakoutC3().candidates(DAY, rows(AAA=brk_row(close=close, high=close + 0.5)))
+        assert close - c.stop >= 1.5 * 2.0 - 1e-9
+
+
+def test_c3_settings_and_registry():
+    from aitrader.backtest.strategies.breakout_c3 import BreakoutC3
+    from aitrader.backtest.strategies.breakout_c2 import BreakoutC2
+    assert issubclass(BreakoutC3, BreakoutC2) and STRATEGIES["breakout_c3"] is BreakoutC3
+    p = BreakoutC3.PARAMS
+    assert (p["stop_floor_atr"], p["regime_filter_short"], p["reentry_cooldown_days"], p["time_stop_days"],
+            p["trail_atr"], p["max_stop"]) == (1.5, True, 10, 40, 3.0, None)
+    from aitrader.backtest.runner import index_strategy_for
+    from aitrader.backtest.strategies.breakout import Breakout
+    assert type(index_strategy_for("breakout_c3")) is Breakout

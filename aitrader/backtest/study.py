@@ -46,6 +46,13 @@ STUDIES: Dict[str, List[Tuple[str, str, MoneySpec, Optional[int]]]] = {
           ("A-fix", "momentum", NEW_RUN_MONEY, None), ("A2-100k", "momentum_a2", NEW_RUN_MONEY, None),
           ("B-fix", "pullback", NEW_RUN_MONEY, None), ("B2-100k", "pullback_b2", NEW_RUN_MONEY, None)],
     # B3: B2 at the 0.05 check (run #36), B2 at 0.15, then B3 with winners allowed to run
+    # C3: C at 0.15 (run #51), C2, C3 and its variants, and a robustness check without C3's best 5 stocks
+    "c3": [("C-fix", "breakout", ("run", 51, {}), 51), ("C2-100k", "breakout_c2", NEW_RUN_MONEY, None),
+           ("C3-100k", "breakout_c3", NEW_RUN_MONEY, None),
+           ("C3-scaled", "breakout_c3", replace(NEW_RUN_MONEY, dd_risk_scaling=True), None),
+           ("C3-half", "breakout_c3", replace(NEW_RUN_MONEY, risk_pct=0.005), None),
+           ("C3-20k", "breakout_c3", SMALL_MONEY, None),
+           ("C3-ex-top5", "breakout_c3", NEW_RUN_MONEY, None, {"exclude_top5_from": "C3-100k"})],
     "b3": [("B2-base", "pullback_b2", ("run", 36, {}), 36),
            ("B2-c15", "pullback_b2", ("run", 36, {"max_charge_to_risk": 0.15}), None),
            ("B3-100k", "pullback_b3", NEW_RUN_MONEY, None), ("B3-20k", "pullback_b3", SMALL_MONEY, None)],
@@ -53,7 +60,17 @@ STUDIES: Dict[str, List[Tuple[str, str, MoneySpec, Optional[int]]]] = {
 
 
 TITLES = {"c": "Combined comparison — C runs and the A/B runs re-run with the 0.15 charge check",
-          "b3": "Combined comparison — B2 at both charge checks and B3"}
+          "b3": "Combined comparison — B2 at both charge checks and B3",
+          "c3": "Combined comparison — C at 0.15, C2 and C3 (with the exclude-top-5 robustness check)"}
+
+
+def top_earlier_symbols(run: dict, n: int = 5) -> List[str]:
+    """The n stocks with the largest ₹ P&L in the run's EARLIER period (never the unseen one)."""
+    by: Dict[str, float] = {}
+    for t in run["trades"]:
+        if t["period"] == "earlier":
+            by[t["symbol"]] = by.get(t["symbol"], 0.0) + float(t["pnl"])
+    return [s for s, _ in sorted(by.items(), key=lambda kv: (-kv[1], kv[0]))[:n]]
 
 
 def reproduction_line(label: str, summary: dict, ref_id: int, ref_summary: Optional[dict]) -> str:
@@ -85,11 +102,16 @@ def run_study(deps: JobDeps, which: Sequence[str], out_dir: Path, start: Optiona
     checks: List[str] = []
     for key in which:
         results[key] = []
-        for label, strategy, money, ref_id in STUDIES[key]:
-            log(f"Running {label} ({strategy}) …")
+        for label, strategy, money, ref_id, *extra in STUDIES[key]:
+            options = extra[0] if extra else {}
+            exclude: Tuple[str, ...] = ()
+            if options.get("exclude_top5_from"):
+                source = dict(results[key])[options["exclude_top5_from"]]
+                exclude = tuple(top_earlier_symbols(source))
+            log(f"Running {label} ({strategy}){' without ' + ', '.join(exclude) if exclude else ''} …")
             with engine.connect() as conn:
                 money = resolve_money(conn, money)
-            run_id = create_run(engine, BacktestRequest(strategy, start, end, money))
+            run_id = create_run(engine, BacktestRequest(strategy, start, end, money, exclude=exclude))
             execute_run(engine, run_id)
             with engine.connect() as conn:
                 run = repo.get_backtest_run(conn, run_id)

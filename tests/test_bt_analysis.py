@@ -133,3 +133,22 @@ def test_mfe_by_exit_reason():
     by = {r["exit_reason"]: r for r in rows}
     assert by["time"]["avg_mfe_r"] == pytest.approx(1.5) and by["time"]["trades"] == 2
     assert by["stop"]["avg_mfe_r"] == pytest.approx(0.2) and by["stop"]["with_mfe"] == 1
+
+
+
+def test_nifty_sma50_table():
+    from aitrader.backtest.analysis import sma50_table
+    ts = [trade(), trade(pnl=-50), trade(period="unseen")]
+    ts[0]["facts"]["nifty_above_sma50"] = True
+    ts[1]["facts"]["nifty_above_sma50"] = False
+    ts[2]["facts"]["nifty_above_sma50"] = False
+    by = {(r["period"], r["regime"]): r for r in sma50_table(ts)}
+    assert by[("earlier", "above")]["trades"] == 1 and by[("earlier", "below")]["pnl"] == -50
+    assert by[("unseen", "below")]["trades"] == 1
+
+
+def test_comparison_has_underwater_and_top5_columns():
+    s = summary(0.1)
+    s["earlier"].update(longest_underwater_months=26.3, top5_share=0.526)
+    md = comparison_markdown([("C3", {"summary": s})])
+    assert "Longest underwater (months)" in md and "26.3" in md and "Top-5 share of profit" in md and "52.6%" in md

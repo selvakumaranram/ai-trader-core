@@ -12,7 +12,8 @@ NAMES = {"momentum": "A — Momentum", "pullback": "B — Trend pullback", "brea
          "price_action": "D — Price action", "momentum_a2": "A2 — Medium-term momentum",
          "pullback_b2": "B2 — Trend pullback, volatility-based stop",
          "breakout_c2": "C2 — Breakout, entry-checked, trailing exit",
-         "pullback_b3": "B3 — Trend pullback, let winners run"}
+         "pullback_b3": "B3 — Trend pullback, let winners run",
+         "breakout_c3": "C3 — Breakout, trend-confirmed"}
 
 RULES = {
     "pullback": """\
@@ -128,6 +129,15 @@ RULES["pullback_b3"] = RULES["pullback_b2"].replace(
 **Exits:** no target; trailing stop 3 × ATR(14) below the highest close since entry; time stop 40 trading days.
 **Re-entry cooldown:** after a stock exits on a stop or stop gap, no new entry in that stock for 10 trading days."""
 
+RULES["breakout_c3"] = RULES["breakout_c2"].replace(
+    "**Stop:** the breakout level − 1 × ATR(14), with no stop-distance cap at the signal (C's 8% check is removed).",
+    "**Stop:** the lower of (breakout level − 1 × ATR(14)) and (signal-day close − 1.5 × ATR(14)), so it is never "
+    "closer than 1.5 ATR; no stop-distance cap at the signal.") + """
+
+**Short-term market filter:** no new long entries unless NIFTY 50 closes above **both** its 50-day and 200-day
+averages on the signal day. **Re-entry cooldown:** 10 trading days after a stop or stop gap in the same stock.
+**Exits:** no target; trailing stop 3 × ATR(14) below the highest close since entry; time stop 40 trading days."""
+
 SKIP_NOTES = {
     "regime_off": "NIFTY 50 closed at or below its 200-day average on the signal day (long entries only)",
     "charges_too_high": "estimated round-trip charges + slippage were more than the allowed share of the rupees "
@@ -136,9 +146,10 @@ SKIP_NOTES = {
     "stop_distance_at_entry": "entry − stop at the actual entry price was outside 1–3 × ATR",
     "weaker_than_nifty": "the stock's 126-day return did not beat NIFTY 50's",
     "cooldown_after_stop": "the stock stopped out within the re-entry cooldown",
+    "short_regime_off": "NIFTY 50 was not above both its 50- and 200-day averages on the signal day",
 }
 
-TRAILING = {"momentum_a2", "breakout_c2", "pullback_b3"}  # no fixed target: trailing stop + time stop
+TRAILING = {"momentum_a2", "breakout_c2", "pullback_b3", "breakout_c3"}  # no fixed target: trailing stop + time stop
 
 QUESTIONS = [
     "Compare profit before and after charges. What does the gap say about trade size, stop distance and the "
@@ -202,6 +213,9 @@ def report_markdown(run: dict) -> str:
     add(f"- **Period tested:** {run['start_date']} → {run['end_date']} (daily candles)")
     add(f"- **Unseen period (judge here):** {run['unseen_from']} → {run['end_date']} — the last 2 years")
     add("- **Universe:** the stocks in the local database today (Nifty 200 list) + NIFTY 50 and NIFTY BANK")
+    excluded = (run.get("params") or {}).get("exclude_symbols") or []
+    if excluded:
+        add(f"- **Robustness check — stocks left out:** {', '.join(excluded)}")
     add("- **Data:** Yahoo Finance daily prices, split-adjusted by Yahoo; cases Yahoo missed are flagged in "
         "section 4\n")
 
@@ -252,6 +266,9 @@ def report_markdown(run: dict) -> str:
         add(f"- **Drawdown pause:** when equity falls {pct(money['max_drawdown_pause'])} or more below its peak, new "
             f"entries stop; they resume once at least {money.get('pause_min_days', 10)} trading days have passed "
             "and NIFTY 50 is above its 200-day average, and the peak then resets to that day's equity.")
+    if money.get("dd_risk_scaling"):
+        add("- **Drawdown risk scaling:** while equity is more than 10% below its all-time peak (this peak never "
+            "resets), risk per trade is halved; full risk returns once equity is within 5% of that peak.")
     add("- **Costs:** Zerodha delivery charges (STT 0.1% each side, exchange, SEBI, stamp duty, GST, DP charge "
         "per sale) plus slippage on every buy and sell.\n")
     add("| Money rule | Value |\n|---|---|")
@@ -268,6 +285,11 @@ def report_markdown(run: dict) -> str:
     cooldown = money.get("reentry_cooldown_days")
     if cooldown is None:
         cooldown = strategy_params.get("reentry_cooldown_days", 0)
+    short = money.get("regime_filter_short")
+    if short is None:
+        short = strategy_params.get("regime_filter_short", False)
+    add(f"| Short-term filter (NIFTY 50 above its 50- and 200-day avg) | {'On' if short else 'Off'} |")
+    add(f"| Drawdown risk scaling | {'Half risk below −10% from the all-time peak, full within −5%' if money.get('dd_risk_scaling') else 'Off'} |")
     add(f"| Re-entry cooldown after a stop | {f'{cooldown} trading days' if cooldown else 'Off'} |")
     add(f"| Drawdown pause | {'Off' if dd is None else pct(dd) + ' below peak, min ' + plain(money.get('pause_min_days', 10)) + ' trading days'} |")
     if is_a2:
@@ -275,6 +297,13 @@ def report_markdown(run: dict) -> str:
         add(f"| Trailing stop (× ATR14 below highest close) | {plain(strategy_params.get('trail_atr'))} |")
         add(f"| Candidates per week / keep if in top | {plain(strategy_params.get('top_n'))} / "
             f"{plain(strategy_params.get('keep_top'))} |")
+        add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
+    elif run["strategy"] == "breakout_c3":
+        add(f"| Stop never closer than (× ATR14 below the signal close) | "
+            f"{plain(strategy_params.get('stop_floor_atr'))} |")
+        add(f"| Stop distance at entry (× ATR14) | {plain(strategy_params.get('entry_min_atr'))}–"
+            f"{plain(strategy_params.get('entry_max_atr'))} |")
+        add(f"| Trailing stop (× ATR14 below highest close) | {plain(strategy_params.get('trail_atr'))} |")
         add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
     elif run["strategy"] == "breakout_c2":
         add(f"| Stop distance at entry (× ATR14) | {plain(strategy_params.get('entry_min_atr'))}–"
@@ -315,6 +344,16 @@ def report_markdown(run: dict) -> str:
            "before charges and slippage.*\n" if is_d else
            "−1R = the initial stop hit; there is no fixed target, so winners can run past +2R.*\n" if trailing else
            "+2R = target hit, −1R = stop hit, before charges and slippage.*\n"))
+
+    dd = s.get("drawdown") or {}
+    if dd.get("peak_date"):
+        add("### Biggest fall\n")
+        add(f"- **{pct(dd['max_drawdown_pct'])}** from the peak on {dd['peak_date']} to the low on "
+            f"{dd['trough_date']}; recovered on {dd['recovery_date'] or 'not recovered by the end of the test'}.")
+        add(f"- Longest time below a previous peak: **{dd['longest_underwater_months']:.1f} months**.")
+        if s.get("half_risk_days"):
+            add(f"- Days traded at half risk (drawdown risk scaling): **{s['half_risk_days']}**.")
+        add("")
 
     add("### Minimum-evidence checklist (not a promise of profit)\n")
     L.extend(f"- {'n/a — not enough trades to judge:' if c.get('na') else ('✅' if c['passed'] else '❌')} "
@@ -414,6 +453,12 @@ def _edge_sections(add, L: List[str], trades: List[dict], s: dict) -> None:
     L.extend(f"| {r['bucket']} | {r['period']} | {r['trades']} | {rupees(r['avg_position_value'])} | "
              f"{rupees(r['avg_risk'])} | {pct(r['win_rate'])} | {num(r['gross_r'])} | {num(r['charges_r'])} | "
              f"{num(r['net_r'])} |" for r in analysis.stop_distance_table(trades))
+    add("")
+
+    add("### By NIFTY 50 vs its 50-day average on the signal day\n")
+    add("| Period | NIFTY 50 | Trades | Win rate | Avg R | ₹ P&L |\n|---|---|---|---|---|---|")
+    L.extend(f"| {r['period']} | {r['regime']} | {r['trades']} | {pct(r['win_rate'])} | {num(r['avg_r'])} | "
+             f"{rupees(r['pnl'])} |" for r in analysis.sma50_table(trades))
     add("")
 
     add("### By market regime on the signal day (NIFTY 50 vs its 200-day average)\n")

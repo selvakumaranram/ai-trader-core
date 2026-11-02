@@ -98,6 +98,23 @@ def week_end_days(days: Sequence) -> Set:
     return out
 
 
+class RiskScaler:
+    """Half the risk while equity is more than `cut` below its all-time peak (which never resets); full risk again
+    once equity is back within `restore` of that peak."""
+
+    def __init__(self, cut: float = 0.10, restore: float = 0.05):
+        self.cut, self.restore = cut, restore
+        self.peak: Optional[float] = None
+        self.factor = 1.0
+
+    def update(self, equity: float) -> None:
+        self.peak = equity if self.peak is None else max(self.peak, equity)
+        if self.factor == 1.0 and equity < self.peak * (1 - self.cut):
+            self.factor = 0.5
+        elif self.factor < 1.0 and equity >= self.peak * (1 - self.restore):
+            self.factor = 1.0
+
+
 class DrawdownGuard:
     """Pause new entries when equity falls `limit` below its peak; resume once at least `min_days` trading days
     have passed since the pause began and NIFTY 50 is above its 200-day average. The peak resets on resume."""

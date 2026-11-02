@@ -11,7 +11,7 @@ from aitrader.backtest.types import LONG, Candidate
 class Breakout:
     key = "breakout"
     name = "Breakout"
-    PARAMS = {"lookback": 20, "volume_surge": 1.5, "atr_mult": 1.0, "max_stop": 0.08}
+    PARAMS = {"lookback": 20, "volume_surge": 1.5, "atr_mult": 1.0, "max_stop": 0.08, "stop_floor_atr": None}
 
     def __init__(self, use_volume: bool = True):
         self.use_volume = use_volume
@@ -32,10 +32,14 @@ class Breakout:
         if direction == LONG:
             level = rows["high20_prior"]
             stop = level - self.PARAMS["atr_mult"] * atr
+            if self.PARAMS["stop_floor_atr"]:  # never closer than this many ATRs below the signal close
+                stop = np.minimum(stop, c - self.PARAMS["stop_floor_atr"] * atr)
             mask = (c > level) & (c > rows["sma50"]) & (stop < c) & self._stop_cap((c - stop) / c)
         else:
             level = rows["low20_prior"]
             stop = level + self.PARAMS["atr_mult"] * atr
+            if self.PARAMS["stop_floor_atr"]:
+                stop = np.maximum(stop, c + self.PARAMS["stop_floor_atr"] * atr)
             mask = (c < level) & (c < rows["sma50"]) & (stop > c) & self._stop_cap((stop - c) / c)
         if self.use_volume:
             mask &= surge >= self.PARAMS["volume_surge"]

@@ -38,6 +38,8 @@ class MoneyRules:
     max_drawdown_pause: Optional[float] = None  # stop new entries this far below peak equity
     pause_min_days: int = 10
     reentry_cooldown_days: Optional[int] = None  # None = the strategy's default (B3: 10); 0 = off
+    regime_filter_short: Optional[bool] = None  # also need NIFTY 50 above its 50-day avg; None = strategy default
+    dd_risk_scaling: bool = False  # half risk while equity is >10% below its all-time peak (back within 5%)
 
 
 NEW_RUN_MONEY = MoneyRules(capital=100_000.0, risk_per_trade=1_000.0, daily_loss_limit=3_000.0, max_positions=5,

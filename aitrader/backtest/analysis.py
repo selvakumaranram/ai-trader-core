@@ -133,16 +133,21 @@ def mfe_by_exit(trades: Sequence[dict]) -> List[dict]:
     return sorted(out, key=lambda r: -r["trades"])
 
 
-def _regime(t: dict) -> str:
-    on = (t.get("facts") or {}).get("regime_on")
+def _regime(t: dict, key: str = "regime_on") -> str:
+    on = (t.get("facts") or {}).get(key)
     return "unknown" if on is None else ("above" if on else "below")
 
 
-def regime_table(trades: Sequence[dict]) -> List[dict]:
+def sma50_table(trades: Sequence[dict]) -> List[dict]:
+    """Trades by NIFTY 50 vs its 50-day average on the signal day."""
+    return regime_table(trades, "nifty_above_sma50")
+
+
+def regime_table(trades: Sequence[dict], key: str = "regime_on") -> List[dict]:
     out = []
     for period in PERIODS:
         for regime in ("above", "below", "unknown"):
-            group = [t for t in trades if t["period"] == period and _regime(t) == regime]
+            group = [t for t in trades if t["period"] == period and _regime(t, key) == regime]
             if group:
                 out.append({"period": period, "regime": regime, "trades": len(group), "win_rate": _win_rate(group),
                             "avg_r": _mean([_f(t, "r_multiple") for t in group]),
@@ -173,11 +178,12 @@ def _rupees(v) -> str:
 
 COLUMNS: Tuple[Tuple[str, str, object], ...] = (
     ("Return", "return_pct", _pct), ("CAGR", "cagr", _pct), ("Max drawdown", "max_drawdown_pct", _pct),
+    ("Longest underwater (months)", "longest_underwater_months", lambda v: "—" if v is None else f"{float(v):.1f}"),
     ("Worst month", "worst_month", _pct), ("Trades", "trades", lambda v: "—" if v is None else str(v)),
     ("% days invested", "pct_days_invested", _pct),
     ("Win rate", "win_rate", _pct), ("Net expectancy (R)", "expectancy_r", _num),
     ("Profit factor", "profit_factor", _num), ("Charges", "total_charges", _rupees),
-    ("Charges % of gross profit", "charges_pct_of_gross", _pct),
+    ("Charges % of gross profit", "charges_pct_of_gross", _pct), ("Top-5 share of profit", "top5_share", _pct),
 )
 
 
