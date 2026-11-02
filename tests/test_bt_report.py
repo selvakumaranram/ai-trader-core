@@ -136,7 +136,7 @@ def test_report_shows_new_money_rules_and_edge_tables(engine):
     run["summary"]["skips"] = {"regime_off": 4, "drawdown_pause": 2, "charges_too_high": 1}
     md = report_markdown(run)
     for text in ("| Risk per trade | 1.0% of equity |", "| Daily loss stop | 3.0% of equity |",
-                 "| Market regime filter (NIFTY 50 vs 200-day avg) | On |", "| Max charges ÷ risk | 5.0% |",
+                 "| Market regime filter (NIFTY 50 vs 200-day avg) | On |", "| Max charges ÷ risk | 15.0% |",
                  "| Drawdown pause | 15.0% below peak, min 10 trading days |", "Gross R | Charges R | Net R",
                  "By stop distance (measured from the actual entry price)", "By market regime on the signal day",
                  "Trades cut below the intended risk", "1 pause(s), 12 trading days paused in total, 2 signals",
