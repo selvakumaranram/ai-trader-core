@@ -21,6 +21,8 @@ from aitrader.quality import (
     check_source_mismatch,
     check_stale,
     find_unknown_closed_days,
+    HISTORY_CHECKS,
+    scan_history_jumps,
 )
 from aitrader.redaction import redact_text
 from aitrader.sources.yfinance_source import DailyBarSource
@@ -30,6 +32,7 @@ log = logging.getLogger(__name__)
 UNDERLYING_QUOTE_KEYS = {"NIFTY": "NSE:NIFTY 50", "BANKNIFTY": "NSE:NIFTY BANK"}
 QUOTE_BATCH = 500
 QUALITY_LOOKBACK_DAYS = 60
+HISTORY_JUMP_THRESHOLD = 0.35  # one-day moves beyond this with no recorded split/bonus are flagged
 NOT_LOGGED_IN = "Kite not logged in"
 SESSION_EXPIRED = "Kite session expired — log in again"
 DAILY_DATA_FINAL_AT = time(16, 30)  # a session daily bar is only final after the close
@@ -256,11 +259,30 @@ def run_quality_checks(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
     return RunResult("ok", {"instruments_checked": checked, "no_data": no_data, "issues": len(issues)})
 
 
+def scan_history(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
+    """Flag unexplained one-day price jumps across each instrument's whole history (e.g. an unadjusted bonus)."""
+    source = deps.bar_source.name
+    flags: List[Issue] = []
+    scanned = 0
+    with deps.engine.connect() as conn:
+        for inst in repo.active_instruments(conn):
+            bars = repo.load_bars(conn, inst["id"], source=source)
+            if not bars:
+                continue
+            scanned += 1
+            flags += scan_history_jumps(bars, repo.corporate_actions_of(conn, inst["id"]),
+                                        HISTORY_JUMP_THRESHOLD, instrument_id=inst["id"])
+    with deps.engine.begin() as conn:
+        repo.delete_issues(conn, HISTORY_CHECKS, date.min, date.max)
+        repo.insert_issues(conn, run_id, flags)
+    return RunResult("ok", {"instruments": scanned, "flags": len(flags)})
+
 _JOBS: Dict[str, Callable[..., RunResult]] = {
     "sync_instruments": sync_instruments,
     "snapshot_options": snapshot_options,
     "ingest_daily_bars": ingest_daily_bars,
     "run_quality_checks": run_quality_checks,
+    "scan_history": scan_history,
     "backfill_history": backfill_history,
 }
 JOB_NAMES = tuple(_JOBS)
@@ -281,6 +303,8 @@ def run_job(name: str, deps: JobDeps, run_date: date, **kwargs) -> RunResult:
         result = RunResult("failed", {}, redact_text(f"{type(exc).__name__}: {exc}")[:500])
     with deps.engine.begin() as conn:
         repo.finish_run(conn, run_id, result.status, result.counts, result.message)
+    if name == "backfill_history" and result.status in ("ok", "partial"):
+        run_job("scan_history", deps, run_date)  # new history can contain unadjusted bonuses/splits
     if name == "snapshot_options" and result.status in ("skipped", "failed"):
         _record_missed_snapshot(deps, run_id, run_date, result.message or result.status)
     return result

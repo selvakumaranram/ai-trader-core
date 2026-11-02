@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from aitrader.backtest.costs import CostModel
@@ -154,3 +155,157 @@ def test_leftover_cash_crumb_position_is_skipped():
     res, _ = run({"AAA": prep([FLAT] * 3), "BBB": prep([FLAT] * 3)},
                  {0: [("AAA", 100, 95, 2.0), ("BBB", 100, 95, 1.0)]}, money=MoneyRules(capital=7500))
     assert [t.symbol for t in res.trades] == ["AAA"] and res.skips == {"no_cash": 1}
+
+
+def test_held_trade_closes_at_last_good_close_on_a_flagged_jump():
+    frames = {"AAA": prep([FLAT, FLAT, FLAT, (25, 25.3, 24.7, 25, 4e6), (25, 25.3, 24.7, 25, 4e6)])}
+    days = list(frames["AAA"].index)
+    plan = {days[0]: [Candidate("AAA", LONG, days[0].date(), 100, 95, 1.0, "t", {})]}
+    res = simulate(frames, days, Scripted(plan), MoneyRules(), COSTS, data_flags={"AAA": {days[3].date()}})
+    (t,) = res.trades
+    assert (t.exit_reason, t.exit_date) == ("data_problem", days[3].date())
+    assert t.exit_price == pytest.approx(100 * 0.9995)
+
+
+@pytest.mark.parametrize("flag_days_before_entry,skipped", [(0, True), (31, True), (400, False)])
+def test_entries_near_a_flagged_jump_are_skipped(flag_days_before_entry, skipped):
+    from datetime import timedelta
+    frames = {"AAA": prep([FLAT] * 4)}
+    days = list(frames["AAA"].index)
+    flag = days[1].date() - timedelta(days=flag_days_before_entry)
+    plan = {days[0]: [Candidate("AAA", LONG, days[0].date(), 100, 95, 1.0, "t", {})]}
+    res = simulate(frames, days, Scripted(plan), MoneyRules(), COSTS, data_flags={"AAA": {flag}})
+    assert (res.skips == {"data_problem": 1}) is skipped and (len(res.trades) == 0) is skipped
+
+
+class ScriptedD(Scripted):
+    exit_policy = "partial_trail"
+    PARAMS = {"partial_r": 1.5, "time_stop_days": 30, "min_stop": 0.01, "max_stop": 0.08}
+
+
+def run_d(frames, plan_by_index, blocked=None, money=MoneyRules()):
+    days = list(frames[next(iter(frames))].index)
+    plan = {days[i]: [Candidate(sym, LONG, days[i].date(), close, stop, 1.0, f"test {sym}", {})
+                      for sym, close, stop in cands] for i, cands in plan_by_index.items()}
+    return simulate(frames, days, ScriptedD(plan), money, COSTS, blocked_entry_days=blocked), days
+
+
+def test_partial_then_breakeven_exit():
+    rows = [FLAT, (100, 101, 99, 100, 1e6), (101, 108, 100.5, 107, 1e6), (106, 106.5, 99.9, 100.2, 1e6), FLAT]
+    res, days = run_d({"AAA": prep(rows)}, {0: [("AAA", 100, 95)]})
+    (t,) = res.trades
+    fill, level = 100.05, 100.05 + 1.5 * 5.05
+    p1, p2 = level * 0.9995, fill * 0.9995
+    assert (t.shares, t.exit_reason, t.exit_date) == (69, "trail_stop", days[3].date())
+    assert t.facts["partial"] == {"date": days[2].date().isoformat(), "price": pytest.approx(p1), "shares": 34}
+    assert t.exit_price == pytest.approx((34 * p1 + 35 * p2) / 69)
+    assert t.charges == pytest.approx(COSTS.buy_charges(69 * fill) + COSTS.sell_charges(34 * p1)
+                                      + COSTS.sell_charges(35 * p2))
+    assert t.pnl == pytest.approx(34 * p1 + 35 * p2 - 69 * fill - t.charges)
+    assert t.r_multiple == pytest.approx(t.pnl / (69 * 5.05))
+
+
+def test_partial_then_trail_then_time():
+    rows = [FLAT, (100, 101, 99, 100, 1e6), (101, 108, 100.5, 107, 1e6)]
+    rows += [(108 + 0.1 * k, 110 + 0.1 * k, 107 + 0.1 * k, 109 + 0.1 * k, 1e6) for k in range(40)]
+    frame_ = prep(rows)
+    frame_["low5"] = frame_["low"].rolling(5).min()
+    res, days = run_d({"AAA": frame_}, {0: [("AAA", 100, 95)]})
+    (t,) = res.trades
+    assert (t.exit_reason, t.exit_date) == ("time", days[31].date())
+
+
+def test_one_share_partial_closes_everything():
+    rows = [(6000, 6010, 5990, 6000, 1e6), (6000, 6010, 5990, 6000, 1e6), (6100, 6400, 6050, 6300, 1e6),
+            (6300, 6310, 6290, 6300, 1e6)]
+    res, _ = run_d({"BIG": prep(rows)}, {0: [("BIG", 6000, 5800)]})
+    (t,) = res.trades
+    assert (t.shares, t.exit_reason) == (1, "partial") and t.facts["partial"]["shares"] == 1
+
+
+def test_stop_distance_rechecked_on_fill():
+    res, _ = run_d({"AAA": prep([FLAT, (104, 105, 103, 104, 1e6), FLAT])}, {0: [("AAA", 100, 95)]})
+    assert res.trades == [] and res.skips == {"stop_distance": 1}
+
+
+def test_event_day_blocks_entry():
+    frame_ = prep([FLAT] * 4)
+    days = list(frame_.index)
+    res, _ = run_d({"AAA": frame_}, {0: [("AAA", 100, 95)]}, blocked={days[1].date()})
+    assert res.trades == [] and res.skips == {"event_day": 1}
+
+
+def test_no_lookahead_for_price_action_through_the_engine():
+    from aitrader.backtest.strategies.price_action import PriceAction
+    rng = np.random.default_rng(11)
+
+    def candles(n=420):
+        rows, prev = [], 1000.0
+        for _ in range(n):
+            o = prev * (1 + rng.normal(0, 0.006))
+            c = o * (1 + rng.normal(0.0008, 0.018))
+            rows.append((o, max(o, c) * (1 + rng.uniform(0, 0.012)), min(o, c) * (1 - rng.uniform(0, 0.02)), c,
+                         1_000_000 * rng.uniform(0.6, 2.2)))
+            prev = c
+        return rows
+
+    raw = {f"S{k}": frame(candles()) for k in range(8)}
+    days = list(raw["S0"].index)
+    cut = days[380]
+    strategy = PriceAction()
+
+    def sim(frames):
+        prepared = {s: strategy.prepare(add_indicators(f)) for s, f in frames.items()}
+        return simulate(prepared, days, strategy, MoneyRules(), COSTS)
+
+    changed = {}
+    for s, f in raw.items():
+        g = f.copy()
+        g.loc[g.index > cut, ["open", "high", "low", "close"]] *= 1.5
+        changed[s] = g
+    base, other = sim(raw), sim(changed)
+
+    def entries(res):
+        return sorted((t.symbol, t.signal_date, t.entry_date, t.entry_price, t.shares, t.stop)
+                      for t in res.trades if t.entry_date <= cut.date())
+
+    assert entries(base) and entries(base) == entries(other)
+    upto = [p for p in base.equity if p.day <= cut.date()]
+    assert upto == other.equity[:len(upto)]
+
+
+def test_price_action_decisions_never_use_later_bars():
+    """At many cut-off days, D's candidates for that day must not change when every later bar changes."""
+    from aitrader.backtest.strategies.price_action import PriceAction
+    rng = np.random.default_rng(5)
+
+    def candles(n=300):
+        rows, prev = [], 1000.0
+        for _ in range(n):
+            o = prev * (1 + rng.normal(0, 0.006))
+            c = o * (1 + rng.normal(0.0008, 0.018))
+            rows.append((o, max(o, c) * (1 + rng.uniform(0, 0.012)), min(o, c) * (1 - rng.uniform(0, 0.02)), c,
+                         1_000_000 * rng.uniform(0.6, 2.2)))
+            prev = c
+        return rows
+
+    strategy = PriceAction()
+    raw = {f"S{k}": frame(candles()) for k in range(10)}
+    base = {s: strategy.prepare(add_indicators(f)) for s, f in raw.items()}
+
+    def decisions(prepared, day):
+        rows = pd.DataFrame({s: f.loc[day] for s, f in prepared.items()}).T
+        return [(c.symbol, c.stop, c.facts["setup"]) for c in strategy.candidates(day, rows)]
+
+    seen = 0
+    for i in range(240, 298, 2):
+        day = raw["S0"].index[i]
+        changed = {}
+        for s, f in raw.items():
+            g = f.copy()
+            g.loc[g.index > day, ["open", "high", "low", "close"]] *= 1.5
+            changed[s] = strategy.prepare(add_indicators(g))
+        expected = decisions(base, day)
+        seen += len(expected)
+        assert expected == decisions(changed, day), day
+    assert seen > 0

@@ -16,6 +16,10 @@ class Breakout:
     def __init__(self, use_volume: bool = True):
         self.use_volume = use_volume
 
+    def _stop_cap(self, dist: pd.Series) -> pd.Series:
+        cap = self.PARAMS["max_stop"]
+        return dist <= cap if cap is not None else pd.Series(True, index=dist.index)
+
     def candidates(self, day: pd.Timestamp, rows: pd.DataFrame) -> List[Candidate]:
         return self.signals(day, rows, LONG)
 
@@ -28,11 +32,11 @@ class Breakout:
         if direction == LONG:
             level = rows["high20_prior"]
             stop = level - self.PARAMS["atr_mult"] * atr
-            mask = (c > level) & (c > rows["sma50"]) & (stop < c) & ((c - stop) / c <= self.PARAMS["max_stop"])
+            mask = (c > level) & (c > rows["sma50"]) & (stop < c) & self._stop_cap((c - stop) / c)
         else:
             level = rows["low20_prior"]
             stop = level + self.PARAMS["atr_mult"] * atr
-            mask = (c < level) & (c < rows["sma50"]) & (stop > c) & ((stop - c) / c <= self.PARAMS["max_stop"])
+            mask = (c < level) & (c < rows["sma50"]) & (stop > c) & self._stop_cap((stop - c) / c)
         if self.use_volume:
             mask &= surge >= self.PARAMS["volume_surge"]
             score = surge

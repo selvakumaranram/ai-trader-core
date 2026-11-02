@@ -9,6 +9,8 @@ import pandas as pd
 
 from aitrader.backtest.types import EquityPoint, MoneyRules, Trade
 
+MIN_UNSEEN_TRADES = 30  # below this the unseen period can't support the other checklist items either way
+
 WARNINGS = [
     "Survivorship bias: today's Nifty 200 list is applied to past years, so stocks that later dropped out are "
     "missing and results look better than reality.",
@@ -126,8 +128,9 @@ def evidence_checklist(earlier, unseen, whole, bench_unseen) -> List[dict]:
     def positive(p):
         return p is not None and p.get("expectancy_r") is not None and p["expectancy_r"] > 0
 
+    enough = unseen is not None and unseen["trades"] >= MIN_UNSEEN_TRADES
     items = [
-        ("unseen_trades", "At least 30 trades in the unseen period", unseen is not None and unseen["trades"] >= 30),
+        ("unseen_trades", "At least 30 trades in the unseen period", enough),
         ("positive_expectancy", "Positive expectancy after charges in both periods",
          positive(earlier) and positive(unseen)),
         ("drawdown", "Biggest fall at most 20% over the whole run",
@@ -137,8 +140,47 @@ def evidence_checklist(earlier, unseen, whole, bench_unseen) -> List[dict]:
          and (unseen["return_pct"] > bench_unseen["return_pct"]
               or unseen["max_drawdown_pct"] < bench_unseen["max_drawdown_pct"])),
     ]
-    return [{"key": k, "label": label, "passed": bool(ok)} for k, label, ok in items]
+    out = [{"key": k, "label": label, "passed": bool(ok)} for k, label, ok in items]
+    if not enough:  # too few unseen trades to judge the other checks either way
+        for item in out[1:]:
+            item.update(passed=None, na=True)
+    return out
 
+
+def _spread(values: Sequence[float]) -> dict:
+    xs = sorted(float(v) for v in values)
+    if not xs:
+        return {"count": 0, "min": None, "median": None, "max": None}
+    mid = len(xs) // 2
+    median = xs[mid] if len(xs) % 2 else (xs[mid - 1] + xs[mid]) / 2
+    return {"count": len(xs), "min": xs[0], "median": median, "max": xs[-1]}
+
+
+def charge_check_summary(trades: Sequence[Trade], skipped_ratios: Sequence[float]) -> dict:
+    """Estimated round-trip charges ÷ ₹ risked for the trades taken and the signals the charge check skipped."""
+    taken = [t.facts["charge_to_risk"] for t in trades if t.facts.get("charge_to_risk") is not None]
+    return {"taken": _spread(taken), "skipped": _spread(skipped_ratios)}
+
+
+def loss_streak_alerts(trades: Sequence[Trade]) -> dict:
+    """"Two losses in a row" notices (never a pause): how many happened, and how the trades taken right after
+    did — entered after the second loss closed, up to and including the next winning trade (by exit order)."""
+    ordered = sorted(trades, key=lambda t: (t.exit_date, t.entry_date, t.symbol))
+    alerts, streak, after = 0, 0, set()
+    for i, t in enumerate(ordered):
+        streak = streak + 1 if t.pnl <= 0 else 0
+        if streak != 2:
+            continue
+        alerts += 1
+        for j in range(i + 1, len(ordered)):
+            if ordered[j].entry_date > t.exit_date:
+                after.add(j)
+            if ordered[j].pnl > 0:
+                break
+    picked = [ordered[j] for j in sorted(after)]
+    return {"alerts": alerts, "after_trades": len(picked),
+            "after_win_rate": sum(1 for t in picked if t.pnl > 0) / len(picked) if picked else None,
+            "after_avg_r": _mean([t.r_multiple for t in picked])}
 
 def summarize(sim, benchmark: List[float], money: MoneyRules, unseen_from: date) -> dict:
     pts = sim.equity
@@ -160,8 +202,11 @@ def summarize(sim, benchmark: List[float], money: MoneyRules, unseen_from: date)
         "benchmark": bench,
         "years": yearly(pts, sim.trades, money.capital),
         "checklist": evidence_checklist(earlier, unseen, whole, bench["unseen"]),
+        "loss_streaks": {"whole": loss_streak_alerts(sim.trades), "unseen": loss_streak_alerts(unseen_trades)},
         "skips": dict(sim.skips),
         "notes": dict(sim.notes),
+        "drawdown_pauses": list(getattr(sim, "pauses", [])),
+        "charge_check": charge_check_summary(sim.trades, getattr(sim, "charge_ratios_skipped", [])),
         "warnings": list(WARNINGS),
     }
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Collection, Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import delete, func, literal_column, select, tuple_, update
@@ -399,3 +399,33 @@ def daily_bars_for_symbol(conn: Connection, symbol: str, *, source: str, start: 
     if end:
         q = q.where(daily_bars.c.trade_date <= end)
     return [dict(r) for r in conn.execute(q.order_by(daily_bars.c.trade_date)).mappings()]
+
+
+def history_jump_flags(conn: Connection) -> List[dict]:
+    q = (select(data_quality_issues.c.instrument_id, instruments.c.symbol, data_quality_issues.c.trade_date,
+                data_quality_issues.c.check_name, data_quality_issues.c.detail)
+         .select_from(data_quality_issues.join(instruments, instruments.c.id == data_quality_issues.c.instrument_id))
+         .where(data_quality_issues.c.check_name.in_(["history_adjustment", "history_jump"]))
+         .order_by(instruments.c.symbol, data_quality_issues.c.trade_date))
+    return [dict(r) for r in conn.execute(q).mappings()]
+
+
+def corporate_actions_of(conn: Connection, instrument_id: int) -> List[CorporateAction]:
+    rows = conn.execute(select(corporate_actions).where(corporate_actions.c.instrument_id == instrument_id)
+                        .order_by(corporate_actions.c.ex_date))
+    return [CorporateAction(r.ex_date, r.kind, float(r.ratio_from), float(r.ratio_to)) for r in rows]
+
+
+def last_finished_run_at(conn: Connection, job: str, statuses: Collection[str] = ("ok",)):
+    return conn.execute(select(func.max(ingestion_runs.c.finished_at))
+                        .where(ingestion_runs.c.job == job, ingestion_runs.c.status.in_(list(statuses)))).scalar()
+
+
+def run_statuses_since(conn: Connection, job: str, run_date: date, since: datetime) -> List[str]:
+    return list(conn.execute(select(ingestion_runs.c.status).where(
+        ingestion_runs.c.job == job, ingestion_runs.c.run_date == run_date,
+        ingestion_runs.c.started_at >= since)).scalars())
+
+
+def latest_bar_ingested_at(conn: Connection, source: str):
+    return conn.execute(select(func.max(daily_bars.c.ingested_at)).where(daily_bars.c.source == source)).scalar()
