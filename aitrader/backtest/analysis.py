@@ -53,6 +53,34 @@ def stop_distance_table(trades: Sequence[dict]) -> List[dict]:
     return out
 
 
+GAP_BUCKETS = ((0.0, "<0%"), (0.01, "0–1%"), (0.03, "1–3%"), (0.05, "3–5%"), (float("inf"), ">5%"))
+
+
+def gap_bucket(entry_open: float, signal_close: float) -> str:
+    gap = entry_open / signal_close - 1
+    return next(label for upper, label in GAP_BUCKETS if gap < upper)
+
+
+def _gap_label(t: dict) -> str:
+    facts = t.get("facts") or {}
+    if facts.get("entry_open") is None or not facts.get("signal_close"):
+        return "unknown"
+    return gap_bucket(float(facts["entry_open"]), float(facts["signal_close"]))
+
+
+def entry_gap_table(trades: Sequence[dict]) -> List[dict]:
+    """Trades by the entry-day gap: next day's open ÷ the signal-day close − 1."""
+    out = []
+    for label in [b for _, b in GAP_BUCKETS] + ["unknown"]:
+        for period in PERIODS:
+            group = [t for t in trades if t["period"] == period and _gap_label(t) == label]
+            if group:
+                r = r_split(group)
+                out.append({"bucket": label, "period": period, "trades": len(group), "win_rate": _win_rate(group),
+                            "gross_r": r["gross_r"], "net_r": r["net_r"]})
+    return out
+
+
 def _regime(t: dict) -> str:
     on = (t.get("facts") or {}).get("regime_on")
     return "unknown" if on is None else ("above" if on else "below")
@@ -94,6 +122,7 @@ def _rupees(v) -> str:
 COLUMNS: Tuple[Tuple[str, str, object], ...] = (
     ("Return", "return_pct", _pct), ("CAGR", "cagr", _pct), ("Max drawdown", "max_drawdown_pct", _pct),
     ("Worst month", "worst_month", _pct), ("Trades", "trades", lambda v: "—" if v is None else str(v)),
+    ("% days invested", "pct_days_invested", _pct),
     ("Win rate", "win_rate", _pct), ("Net expectancy (R)", "expectancy_r", _num),
     ("Profit factor", "profit_factor", _num), ("Charges", "total_charges", _rupees),
     ("Charges % of gross profit", "charges_pct_of_gross", _pct),
@@ -102,7 +131,10 @@ COLUMNS: Tuple[Tuple[str, str, object], ...] = (
 
 def checklist_result(summary: dict) -> str:
     items = summary.get("checklist") or []
-    return f"{sum(1 for c in items if c['passed'])}/{len(items)}" if items else "—"
+    if not items:
+        return "—"
+    na = sum(1 for c in items if c.get("na"))
+    return f"{sum(1 for c in items if c['passed'])}/{len(items)}" + (f" ({na} n/a)" if na else "")
 
 
 def comparison_markdown(rows: Sequence[Tuple[str, dict]], title: str = "Comparison") -> str:

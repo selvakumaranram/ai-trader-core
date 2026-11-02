@@ -67,3 +67,32 @@ def test_comparison_has_a_row_per_run_and_earlier_and_unseen_tables():
     md = comparison_markdown([("A-base", {"summary": summary(-0.3)}), ("A2-100k", {"summary": summary(0.2)})])
     assert "## Earlier years" in md and "## Unseen years" in md
     assert md.count("| A-base |") == 2 and "2/4" in md and "-30.0%" in md and "-15.0%" in md
+
+
+def gap_trade(open_, close=100.0, period="earlier", pnl=40.0):
+    t = trade(period=period, pnl=pnl)
+    t["facts"].update(entry_open=open_, signal_close=close)
+    return t
+
+
+def test_entry_gap_buckets_from_entry_open_vs_signal_close():
+    from aitrader.backtest.analysis import entry_gap_table, gap_bucket
+    assert [gap_bucket(o, 100) for o in (99.5, 100, 100.9, 101, 102.9, 103, 105, 106)] == [
+        "<0%", "0–1%", "0–1%", "1–3%", "1–3%", "3–5%", ">5%", ">5%"]
+    rows = entry_gap_table([gap_trade(106), gap_trade(106, period="unseen", pnl=-50), gap_trade(99), trade()])
+    by = {(r["bucket"], r["period"]): r for r in rows}
+    assert by[(">5%", "earlier")]["trades"] == 1 and by[(">5%", "unseen")]["win_rate"] == 0.0
+    assert by[("<0%", "earlier")]["gross_r"] == pytest.approx(1.0) and ("unknown", "earlier") in by
+
+
+def test_checklist_result_counts_na():
+    from aitrader.backtest.analysis import checklist_result
+    s = {"checklist": [{"passed": False}, {"passed": None, "na": True}, {"passed": None, "na": True},
+                       {"passed": None, "na": True}]}
+    assert checklist_result(s) == "0/4 (3 n/a)"
+
+
+def test_comparison_shows_days_invested():
+    md = comparison_markdown([("C-base", {"summary": {**summary(0.1), "earlier": {**summary(0.1)["earlier"],
+                                                                                  "pct_days_invested": 0.148}}})])
+    assert "% days invested" in md and "14.8%" in md

@@ -10,7 +10,8 @@ from aitrader.backtest import analysis
 
 NAMES = {"momentum": "A — Momentum", "pullback": "B — Trend pullback", "breakout": "C — Breakout",
          "price_action": "D — Price action", "momentum_a2": "A2 — Medium-term momentum",
-         "pullback_b2": "B2 — Trend pullback, volatility-based stop"}
+         "pullback_b2": "B2 — Trend pullback, volatility-based stop",
+         "breakout_c2": "C2 — Breakout, entry-checked, trailing exit"}
 
 RULES = {
     "pullback": """\
@@ -103,6 +104,20 @@ ATR(14). There is no fixed 1–8% band.
 **Ranking for free slots:** stronger trend first, measured as (50-day avg − 200-day avg) ÷ 200-day avg.""",
 }
 
+RULES["breakout_c2"] = """\
+**Idea:** strategy C's breakout entry, but the stop distance is checked at the actual entry price (which also blocks
+big gap-ups), and winners are allowed to run with a trailing stop instead of a fixed 2R target.
+
+A stock becomes a candidate at the day's close when **all** of these are true:
+1. **Breakout:** close > the highest high of the previous 20 days.
+2. **Volume:** today's volume ≥ 1.5 × the average volume of the previous 20 days.
+3. **Trend filter:** close > 50-day average.
+
+**Stop:** the breakout level − 1 × ATR(14), with no stop-distance cap at the signal (C's 8% check is removed).
+**At entry** (next day's open, the actual price): skipped unless entry − stop is between 1 × and 3 × ATR(14).
+**Ranking for free slots:** strongest volume surge first.
+For NIFTY / BANKNIFTY the table uses C's original index rules and is for research only."""
+
 SKIP_NOTES = {
     "regime_off": "NIFTY 50 closed at or below its 200-day average on the signal day (long entries only)",
     "charges_too_high": "estimated round-trip charges + slippage were more than the allowed share of the rupees "
@@ -111,6 +126,8 @@ SKIP_NOTES = {
     "stop_distance_at_entry": "entry − stop at the actual entry price was outside 1–3 × ATR",
     "weaker_than_nifty": "the stock's 126-day return did not beat NIFTY 50's",
 }
+
+TRAILING = {"momentum_a2", "breakout_c2"}  # no fixed target: trailing stop + time stop
 
 QUESTIONS = [
     "Compare profit before and after charges. What does the gap say about trade size, stop distance and the "
@@ -190,14 +207,17 @@ def report_markdown(run: dict) -> str:
     strategy_params = (run.get("params") or {}).get("strategy") or {}
     is_d = run["strategy"] == "price_action"
     is_a2 = run["strategy"] == "momentum_a2"
-    if is_a2:
-        add("- **No fixed target.** After each close the stop becomes max(previous stop, highest close since "
-            "entry − 3 × ATR(14)); it never moves down and applies from the next day.")
+    trailing = run["strategy"] in TRAILING
+    if trailing:
+        add(f"- **No fixed target.** After each close the stop becomes max(previous stop, highest close since "
+            f"entry − {plain(strategy_params.get('trail_atr'))} × ATR(14)); it never moves down and applies from "
+            "the next day.")
         add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at "
-            "the stop (\"trail stop\" once it has risen above the initial stop); after 60 trading days → sell at "
-            "the close. **Rank exit:** on each weekly signal day, a held stock no longer in the top 30 by score "
-            "(or closing below its 200-day average) is sold at the next open — recorded as \"stop gap\" if that "
-            "open is already below the stop.")
+            "the stop (\"trail stop\" once it has risen above the initial stop); after "
+            f"{plain(strategy_params.get('time_stop_days'))} trading days → sell at the close."
+            + (" **Rank exit:** on each weekly signal day, a held stock no longer in the top 30 by score "
+               "(or closing below its 200-day average) is sold at the next open — recorded as \"stop gap\" if "
+               "that open is already below the stop." if is_a2 else ""))
     elif is_d:
         add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at "
             "the stop; high touches entry + 1.5 × (entry − stop) → sell **half** there, then the rest gets a "
@@ -241,6 +261,11 @@ def report_markdown(run: dict) -> str:
         add(f"| Candidates per week / keep if in top | {plain(strategy_params.get('top_n'))} / "
             f"{plain(strategy_params.get('keep_top'))} |")
         add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
+    elif run["strategy"] == "breakout_c2":
+        add(f"| Stop distance at entry (× ATR14) | {plain(strategy_params.get('entry_min_atr'))}–"
+            f"{plain(strategy_params.get('entry_max_atr'))} |")
+        add(f"| Trailing stop (× ATR14 below highest close) | {plain(strategy_params.get('trail_atr'))} |")
+        add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
     elif run["strategy"] == "pullback_b2":
         add(f"| Stop never closer than (× ATR14) | {plain(strategy_params.get('stop_atr'))} |")
         add(f"| Stop distance at entry (× ATR14) | {plain(strategy_params.get('entry_min_atr'))}–"
@@ -249,7 +274,7 @@ def report_markdown(run: dict) -> str:
     if is_d:
         add(f"| Partial profit at (× risk) | {plain(strategy_params.get('partial_r'))} |")
         add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
-    elif not is_a2:  # A2's time stop is listed above; it has no target
+    elif not trailing:  # trailing strategies list their time stop above and have no target
         add(f"| Target (× risk) | {plain(money.get('reward_multiple'))} |")
         add(f"| Time stop (trading days) | {plain(money.get('time_stop_days'))} |")
     add("")
@@ -266,11 +291,12 @@ def report_markdown(run: dict) -> str:
     add("*R = profit or loss divided by the rupees risked on that trade ((entry − stop) × shares). "
         + ("−1R = stop hit before the partial; half sold at 1.5R then the rest out at breakeven ≈ +0.75R; all "
            "before charges and slippage.*\n" if is_d else
-           "−1R = the initial stop hit; there is no fixed target, so winners can run past +2R.*\n" if is_a2 else
+           "−1R = the initial stop hit; there is no fixed target, so winners can run past +2R.*\n" if trailing else
            "+2R = target hit, −1R = stop hit, before charges and slippage.*\n"))
 
     add("### Minimum-evidence checklist (not a promise of profit)\n")
-    L.extend(f"- {'✅' if c['passed'] else '❌'} {c['label']}" for c in s.get("checklist", []))
+    L.extend(f"- {'n/a — not enough trades to judge:' if c.get('na') else ('✅' if c['passed'] else '❌')} "
+             f"{c['label']}" for c in s.get("checklist", []))
     add("")
     streaks = (s.get("loss_streaks") or {}).get("whole") or {}
     if streaks.get("alerts"):
@@ -375,6 +401,22 @@ def _edge_sections(add, L: List[str], trades: List[dict], s: dict) -> None:
     add("\n*\"unknown\" = trades from runs made before this was recorded.*\n")
 
     size = analysis.sizing(trades)
+    add("### By entry gap (next day's open vs the signal-day close)\n")
+    add("| Entry gap | Period | Trades | Win rate | Gross R | Net R |\n|---|---|---|---|---|---|")
+    L.extend(f"| {r['bucket']} | {r['period']} | {r['trades']} | {pct(r['win_rate'])} | {num(r['gross_r'])} | "
+             f"{num(r['net_r'])} |" for r in analysis.entry_gap_table(trades))
+    add("")
+
+    spread = s.get("charge_check")
+    if spread:
+        add("### Estimated charges ÷ risk (round-trip charges + slippage ÷ rupees risked, at the actual entry)\n")
+        add("| | Count | Min | Median | Max |\n|---|---|---|---|---|")
+        for label, key in (("Taken", "taken"), ("Skipped by the charge check", "skipped")):
+            d = spread.get(key) or {}
+            add(f"| {label} | {d.get('count', 0)} | {pct(d.get('min'))} | {pct(d.get('median'))} | "
+                f"{pct(d.get('max'))} |")
+        add("")
+
     add("### Position size\n")
     add(f"- Average position value: **{rupees(size['avg_position_value'])}**")
     add(f"- Trades cut below the intended risk: **{pct(size['pct_cut'])}** ({size['cut_by_cap']} by the "

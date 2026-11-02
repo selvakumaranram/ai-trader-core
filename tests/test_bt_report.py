@@ -170,3 +170,21 @@ def test_b2_report_marks_index_signals_research_only(engine):
     for text in ("B2 — Trend pullback, volatility-based stop", "1.5 × ATR(14)", "126-day return",
                  "not for trading, research only", "| Stop distance at entry (× ATR14) | 1.0–3.0 |"):
         assert text in md, text
+
+
+def test_report_shows_checklist_na_charge_spread_and_entry_gaps(engine):
+    run = strategy_run(engine, "breakout_c2")
+    assert run["status"] == "ok", run["message"]
+    run["summary"]["checklist"] = [
+        {"key": "unseen_trades", "label": "At least 30 trades in the unseen period", "passed": False},
+        {"key": "positive_expectancy", "label": "Positive expectancy", "passed": None, "na": True}]
+    run["summary"]["charge_check"] = {"taken": {"count": 2, "min": 0.04, "median": 0.06, "max": 0.08},
+                                      "skipped": {"count": 3, "min": 0.2, "median": 0.3, "max": 0.9}}
+    md = report_markdown(run)
+    for text in ("C2 — Breakout, entry-checked, trailing exit", "n/a — not enough trades to judge",
+                 "Estimated charges ÷ risk", "| Taken | 2 | 4.0% | 6.0% | 8.0% |",
+                 "| Skipped by the charge check | 3 | 20.0% | 30.0% | 90.0% |", "### By entry gap",
+                 "| Time stop (trading days) | 40 |", "| Stop distance at entry (× ATR14) | 1.0–3.0 |",
+                 "no stop-distance cap at the signal", "Trailing stop (× ATR14 below highest close) | 3.0 |"):
+        assert text in md, text
+    assert "Rank exit" not in md and "| Target (× risk) |" not in md

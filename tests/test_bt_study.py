@@ -53,3 +53,23 @@ def test_reproduction_check_compares_trades_and_return():
                                   21, {"whole": {"trades": 524, "return_pct": -0.357204}})
     assert ok.startswith("✅") and "524 trades" in ok and "-35.7%" in ok
     assert bad.startswith("❌")
+
+
+def test_study_c_set_copies_run_33_settings_and_reruns_a_b_with_the_new_default(engine):
+    labels = [(label, strategy) for label, strategy, _, _ in study.STUDIES["c"]]
+    assert labels == [("C-base", "breakout"), ("C-fix", "breakout"), ("C2-100k", "breakout_c2"),
+                      ("C2-20k", "breakout_c2"), ("A-fix", "momentum"), ("A2-100k", "momentum_a2"),
+                      ("B-fix", "pullback"), ("B2-100k", "pullback_b2")]
+    stored = {**__import__("dataclasses").asdict(NEW_RUN_MONEY), "max_charge_to_risk": 0.05}
+    with engine.begin() as conn:
+        run_id = repo.insert_backtest_run(conn, strategy="breakout", start_date=None, end_date=None,
+                                          unseen_from=None, params={"money": stored})
+    specs = {label: money for label, _, money, _ in study.STUDIES["c"]}
+    with engine.connect() as conn:
+        base = study.resolve_money(conn, specs["C-base"], run_33=run_id)
+        fix = study.resolve_money(conn, specs["C-fix"], run_33=run_id)
+        assert study.resolve_money(conn, specs["A-fix"], run_33=run_id).max_charge_to_risk == 0.15
+        small = study.resolve_money(conn, specs["C2-20k"], run_33=run_id)
+    assert base == MoneyRules(**stored) and fix == MoneyRules(**{**stored, "max_charge_to_risk": 0.15})
+    assert (small.capital, small.max_position_value, small.max_charge_to_risk) == (20_000, 7_000, 0.15)
+    assert study.STUDIES["c"][0][3] == 33  # C-base must reproduce run #33
