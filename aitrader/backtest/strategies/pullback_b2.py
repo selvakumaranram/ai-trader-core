@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+from aitrader.backtest.rules import atr_stop_distance_check
 from aitrader.backtest.types import LONG, Candidate
 
 
@@ -52,8 +53,4 @@ class PullbackB2:
 
     def entry_check(self, cand: Candidate, fill: float) -> Optional[str]:
         """Once the actual entry price is known: the stop must be 1–3 ATR below it."""
-        atr = cand.facts["atr14"]
-        dist = fill - cand.stop
-        if not self.PARAMS["entry_min_atr"] * atr <= dist <= self.PARAMS["entry_max_atr"] * atr:
-            return "stop_distance_at_entry"
-        return None
+        return atr_stop_distance_check(cand, fill, self.PARAMS["entry_min_atr"], self.PARAMS["entry_max_atr"])

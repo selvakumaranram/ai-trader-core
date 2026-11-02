@@ -75,6 +75,14 @@ def round_trip_estimate(costs, shares: int, fill: float, open_: float) -> float:
             + shares * open_ * costs.slippage * 2)
 
 
+def atr_stop_distance_check(cand, fill: float, min_atr: float, max_atr: float) -> Optional[str]:
+    """Once the actual entry price is known: entry − stop must be between min_atr and max_atr × the signal-day ATR."""
+    atr = cand.facts["atr14"]
+    if not min_atr * atr <= fill - cand.stop <= max_atr * atr:
+        return "stop_distance_at_entry"
+    return None
+
+
 def atr_trail_stop(stop: float, highest_close: float, atr: float, multiple: float = 3.0) -> float:
     """Strategy A2's trail: highest close since entry − multiple × ATR, never lower than the current stop."""
     candidate = highest_close - multiple * atr

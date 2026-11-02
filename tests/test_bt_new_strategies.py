@@ -220,3 +220,67 @@ def test_b2_gap_down_open_leaving_under_one_atr_is_skipped_in_the_engine():
 
 def test_new_strategies_are_registered():
     assert STRATEGIES["momentum_a2"] is MomentumA2 and STRATEGIES["pullback_b2"] is PullbackB2
+
+
+# --- C2 ---------------------------------------------------------------------------------------------------------
+
+from aitrader.backtest.strategies.breakout_c2 import BreakoutC2  # noqa: E402
+
+
+def brk_row(**over):
+    base = dict(open=104.0, high=106.0, low=103.5, close=105.0, volume=3e6, vol20_prior=1e6, high20_prior=103.0,
+                low20_prior=95.0, sma50=98.0, atr14=2.0)
+    return {**base, **over}
+
+
+def test_c2_keeps_c_entry_but_drops_the_eight_percent_stop_cap():
+    from aitrader.backtest.strategies.breakout import Breakout
+    wide = brk_row(close=125.0, high=126.0, atr14=2.0)  # stop 101 is 19% below the close: C refuses, C2 keeps it
+    assert Breakout().candidates(DAY, rows(AAA=wide)) == []
+    (c,) = BreakoutC2().candidates(DAY, rows(AAA=wide))
+    assert c.stop == pytest.approx(103.0 - 2.0) and c.score == pytest.approx(3.0)
+    assert BreakoutC2().candidates(DAY, rows(AAA=brk_row(volume=1.4e6))) == []  # volume rule kept
+
+
+@pytest.mark.parametrize("fill,skipped", [(102.9, True), (103.1, False), (106.9, False), (107.1, True)])
+def test_c2_stop_distance_checked_at_the_actual_entry(fill, skipped):
+    c = Candidate("AAA", LONG, DAY.date(), 105.0, 101.0, 3.0, "t", {"atr14": 2.0})  # 1–3 ATR = 103–107
+    assert (BreakoutC2().entry_check(c, fill) == "stop_distance_at_entry") is skipped
+
+
+def test_c2_skips_a_gap_up_that_puts_the_stop_more_than_three_atr_away():
+    df = prep([FLAT] * 20 + [(110, 111, 109, 110, 1e6), FLAT])  # signal close 100, stop 98, ATR ≈ 2, opens 110
+    days = list(df.index)
+
+    class One(BreakoutC2):
+        def candidates(self, day, rows_):
+            return [Candidate("AAA", LONG, day.date(), 100.0, 98.0, 3.0, "t", {"atr14": 2.0})] \
+                if day == days[19] else []
+
+    res = simulate({"AAA": df}, days, One(), MoneyRules(), COSTS)
+    assert res.trades == [] and res.skips == {"stop_distance_at_entry": 1}
+
+
+def test_c2_trails_with_no_target_and_a_forty_day_time_stop():
+    df = prep([FLAT] * 20 + [(100.5, 101, 100, 100.5, 1e6)] * 45)  # quiet: stop never reached
+    days = list(df.index)
+
+    class One(BreakoutC2):
+        def candidates(self, day, rows_):
+            return [Candidate("AAA", LONG, day.date(), 100.0, 97.5, 3.0, "t", {"atr14": 2.0})] \
+                if day == days[19] else []
+
+    (t,) = simulate({"AAA": df}, days, One(), MoneyRules(), COSTS).trades
+    assert t.exit_reason == "time" and t.exit_date == days[20 + 40].date() and t.target == float("inf")
+    assert BreakoutC2.exit_policy == "atr_trail" and BreakoutC2.PARAMS["trail_atr"] == 3.0
+    assert STRATEGIES["breakout_c2"] is BreakoutC2
+
+
+def test_index_tables_use_the_family_rules():
+    from aitrader.backtest.runner import index_strategy_for
+    from aitrader.backtest.strategies.breakout import Breakout
+    from aitrader.backtest.strategies.pullback import Pullback
+    for key in ("breakout", "breakout_c2"):
+        s = index_strategy_for(key)
+        assert type(s) is Breakout and s.use_volume is False
+    assert type(index_strategy_for("pullback_b2")) is Pullback and type(index_strategy_for("pullback")) is Pullback

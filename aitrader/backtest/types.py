@@ -41,7 +41,7 @@ class MoneyRules:
 
 NEW_RUN_MONEY = MoneyRules(capital=100_000.0, risk_per_trade=1_000.0, daily_loss_limit=3_000.0, max_positions=5,
                            max_position_value=25_000.0, risk_mode="percent", risk_pct=0.01, daily_loss_pct=0.03,
-                           regime_filter=True, max_charge_to_risk=0.05, max_drawdown_pause=0.15)
+                           regime_filter=True, max_charge_to_risk=0.15, max_drawdown_pause=0.15)
 
 
 @dataclass

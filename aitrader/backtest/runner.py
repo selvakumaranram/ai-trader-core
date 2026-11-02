@@ -131,6 +131,12 @@ def _fail(engine: Engine, run_id: int, message: str) -> None:
         repo.finish_backtest_run(conn, run_id, status="failed", message=message)
 
 
+def index_strategy_for(strategy_key: str):
+    """The rules behind a run's NIFTY/BANKNIFTY research table: each family's original index rules."""
+    return {"breakout": lambda: Breakout(use_volume=False), "breakout_c2": lambda: Breakout(use_volume=False),
+            "price_action": lambda: PriceAction(use_volume=False)}.get(strategy_key, Pullback)()
+
+
 def regime_by_day(nifty_close) -> dict:
     """NIFTY 50 above its 200-day simple average of closes, by date (days without 200 closes yet are absent)."""
     sma200 = nifty_close.rolling(REGIME_SMA, min_periods=REGIME_SMA).mean()
@@ -223,8 +229,7 @@ def _execute(engine: Engine, run_id: int) -> None:
     summary = summarize(sim, bench, money, unseen_from)
     signals = []
     if run["strategy"] in INDEX_STRATEGIES:
-        idx_strategy = {"breakout": lambda: Breakout(use_volume=False),
-                        "price_action": lambda: PriceAction(use_volume=False)}.get(run["strategy"], Pullback)()
+        idx_strategy = index_strategy_for(run["strategy"])
         idx_prepare = getattr(idx_strategy, "prepare", lambda df: df)
         for symbol, f in sorted(market.indices.items()):
             signals += index_signals(idx_prepare(add_indicators(f)), symbol, days, idx_strategy, money,

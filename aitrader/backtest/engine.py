@@ -30,6 +30,7 @@ class SimResult:
     skips: Dict[str, int]
     notes: Dict[str, int]
     pauses: List[dict] = field(default_factory=list)
+    charge_ratios_skipped: List[float] = field(default_factory=list)
 
 
 @dataclass
@@ -114,6 +115,7 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
     equity: List[EquityPoint] = []
     skips: Counter = Counter()
     notes: Counter = Counter()
+    charge_ratios_skipped: List[float] = []
     last = len(days) - 1
 
     for i, day in enumerate(days):
@@ -169,11 +171,12 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
             if shares < max(1, math.ceil(wanted * MIN_FILL_FRACTION)):
                 skips["no_cash"] += 1  # a leftover-cash crumb would distort R and pay fixed charges for nothing
                 continue
-            if money.max_charge_to_risk is not None:
-                at_risk = shares * (fill - cand.stop)
-                if round_trip_estimate(costs, shares, fill, open_) > money.max_charge_to_risk * at_risk:
-                    skips["charges_too_high"] += 1
-                    continue
+            # estimated round-trip charges + slippage ÷ ₹ risked, at the actual entry and the final share count
+            charge_ratio = round_trip_estimate(costs, shares, fill, open_) / (shares * (fill - cand.stop))
+            if money.max_charge_to_risk is not None and charge_ratio > money.max_charge_to_risk:
+                skips["charges_too_high"] += 1
+                charge_ratios_skipped.append(charge_ratio)
+                continue
             intended = risk_shares(fill, cand.stop, risk_amount)
             cut = "cash" if shares < wanted else ("cap" if wanted < intended else None)
             charges = costs.buy_charges(shares * fill)
@@ -181,7 +184,8 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
             positions[cand.symbol] = _Position(
                 cand, d, fill, shares, planned_target(fill, cand.stop, reward), charges, fill, stop=cand.stop,
                 sizing={"risk_amount": round(risk_amount, 2), "intended_shares": intended, "size_cut": cut,
-                        "regime_on": regime_on(cand.signal_date)})
+                        "regime_on": regime_on(cand.signal_date), "charge_to_risk": round(charge_ratio, 5),
+                        "entry_open": open_, "signal_close": cand.signal_close})
         pending = []
 
         # 2. exits
@@ -245,7 +249,7 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
         # 5. candidates (and A2's weekly rank check) at the close
         if i < last and (signal_days is None or day in signal_days):
             eligible = today[(today["bars"] >= MIN_BARS) & (today["value20"] >= MIN_TRADED_VALUE)]
-            if atr_trail and positions:
+            if atr_trail and positions and hasattr(strategy, "rank_keep"):  # A2's weekly rank exit
                 keep = strategy.rank_keep(day, eligible)
                 for symbol, pos in positions.items():
                     pos.rank_exit = symbol not in keep
@@ -256,7 +260,8 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 pending = [c for c in pending if c.direction != LONG]
 
     skips.update(getattr(strategy, "skips", {}))  # signals a strategy filtered itself (e.g. B2's weaker_than_nifty)
-    return SimResult(trades, equity, dict(skips), dict(notes), guard.finish(last) if guard else [])
+    return SimResult(trades, equity, dict(skips), dict(notes), guard.finish(last) if guard else [],
+                     charge_ratios_skipped)
 
 
 def _col(today: pd.DataFrame, symbol: str, column: str) -> float:

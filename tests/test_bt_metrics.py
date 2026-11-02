@@ -63,7 +63,28 @@ def test_checklist():
     assert [i["passed"] for i in items] == [True, True, True, True]
     items = evidence_checklist(None, {**unseen, "trades": 5}, {"max_drawdown_pct": 0.3},
                                {"return_pct": 0.2, "max_drawdown_pct": 0.05})
-    assert [i["passed"] for i in items] == [False, False, False, False]
+    assert [i["passed"] for i in items] == [False, None, None, None]  # <30 unseen trades: the rest are n/a
+    assert [i.get("na", False) for i in items] == [False, True, True, True]
+
+
+def test_checklist_judges_everything_from_thirty_unseen_trades():
+    unseen = {"expectancy_r": -0.1, "trades": 30, "return_pct": -0.05, "max_drawdown_pct": 0.3}
+    items = evidence_checklist({"expectancy_r": 0.2}, unseen, {"max_drawdown_pct": 0.3},
+                               {"return_pct": 0.2, "max_drawdown_pct": 0.05})
+    assert [i["passed"] for i in items] == [True, False, False, False] and not any(i.get("na") for i in items)
+
+
+def test_charge_ratio_summary_for_taken_and_skipped():
+    from aitrader.backtest.metrics import charge_check_summary
+    from aitrader.backtest.types import Trade
+    from datetime import date
+    def t(ratio):
+        return Trade("X", date(2025, 1, 1), date(2025, 1, 2), 100, 1, 90, 0, date(2025, 1, 3), 100, "time", 0, 0, 0,
+                     "", {"charge_to_risk": ratio})
+    s = charge_check_summary([t(0.02), t(0.10), t(0.04), Trade("Y", *[None] * 13, {})], [0.3, 0.2, 0.9, 0.5])
+    assert s["taken"] == {"count": 3, "min": 0.02, "median": 0.04, "max": 0.10}
+    assert s["skipped"] == {"count": 4, "min": 0.2, "median": 0.4, "max": 0.9}
+    assert charge_check_summary([], [])["taken"] == {"count": 0, "min": None, "median": None, "max": None}
 
 
 def sim(points, trades=()):
@@ -75,7 +96,8 @@ def test_summarize_without_earlier_period():
     s = summarize(sim(pts, [trade(100, 1.0, entry=date(2024, 1, 2))]), [20000, 20200], MoneyRules(), date(2023, 1, 1))
     assert s["earlier"] is None and s["unseen"]["trades"] == 1 and s["whole"]["trades"] == 1
     assert s["benchmark"]["unseen"]["return_pct"] == pytest.approx(0.01)
-    assert next(i for i in s["checklist"] if i["key"] == "positive_expectancy")["passed"] is False
+    item = next(i for i in s["checklist"] if i["key"] == "positive_expectancy")
+    assert item["passed"] is None and item["na"]  # 1 unseen trade: not enough to judge
     assert s["skips"] == {"no_slot": 2} and s["unseen_from"] == "2023-01-01" and s["warnings"]
 
 

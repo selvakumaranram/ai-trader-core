@@ -160,3 +160,38 @@ def test_week_end_days_handle_holidays():
                                       "2025-11-17")]
     assert week_end_days(days) == {pd.Timestamp("2025-11-06"), pd.Timestamp("2025-11-14"),
                                    pd.Timestamp("2025-11-17")}
+
+
+# --- charge check v2: 0.15 default, actual entry + final shares, ratios recorded ---------------------------------
+
+def test_new_runs_default_to_a_fifteen_percent_charge_check_and_old_value_can_be_passed():
+    from dataclasses import replace
+    from aitrader.backtest.types import NEW_RUN_MONEY
+    assert NEW_RUN_MONEY.max_charge_to_risk == 0.15
+    assert replace(NEW_RUN_MONEY, max_charge_to_risk=0.05).max_charge_to_risk == 0.05
+
+
+def test_charge_check_uses_actual_entry_and_final_shares_and_records_the_ratio():
+    # cash limits the position to 60 of the 99 shares the risk would buy: the ratio must use 60 shares at the fill
+    money = MoneyRules(capital=6_100, risk_mode="percent", risk_pct=0.163, max_position_value=25_000,
+                       max_charge_to_risk=0.15)
+    res, _ = run({"AAA": prep([FLAT, (101, 102, 100, 101, 1e6), FLAT, FLAT])}, {0: [("AAA", 100, 90, 1.0)]},
+                 money=money)
+    (t,) = res.trades
+    assert t.shares < t.facts["intended_shares"] and t.facts["size_cut"] == "cash"
+    expected = round_trip_estimate(COSTS, t.shares, t.entry_price, 101.0) / (t.shares * (t.entry_price - 90))
+    assert t.facts["charge_to_risk"] == pytest.approx(expected, rel=1e-3)
+    assert t.facts["entry_open"] == 101.0 and t.facts["signal_close"] == 100.0
+
+
+def test_skipped_charge_ratios_are_collected():
+    money = MoneyRules(capital=100_000, risk_mode="percent", risk_pct=0.01, max_position_value=25_000,
+                       max_charge_to_risk=0.15)
+    res, _ = run({"AAA": prep([FLAT] * 4)}, {0: [("AAA", 100, 99.8, 1.0)]}, money=money)
+    assert res.skips == {"charges_too_high": 1}
+    assert len(res.charge_ratios_skipped) == 1 and res.charge_ratios_skipped[0] > 0.15
+
+
+def test_charge_ratio_recorded_even_with_the_check_off():
+    res, _ = run({"AAA": prep([FLAT] * 4)}, {0: [("AAA", 100, 95, 1.0)]})
+    assert res.trades[0].facts["charge_to_risk"] > 0 and res.charge_ratios_skipped == []
