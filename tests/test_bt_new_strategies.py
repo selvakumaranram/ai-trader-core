@@ -284,3 +284,31 @@ def test_index_tables_use_the_family_rules():
         s = index_strategy_for(key)
         assert type(s) is Breakout and s.use_volume is False
     assert type(index_strategy_for("pullback_b2")) is Pullback and type(index_strategy_for("pullback")) is Pullback
+
+
+# --- B3 ---------------------------------------------------------------------------------------------------------
+
+def test_b3_is_b2_entries_with_a_trailing_exit_forty_day_stop_and_cooldown():
+    from aitrader.backtest.strategies.pullback_b3 import PullbackB3
+    assert issubclass(PullbackB3, PullbackB2) and STRATEGIES["pullback_b3"] is PullbackB3
+    assert PullbackB3.exit_policy == "atr_trail" and PullbackB3.PARAMS["trail_atr"] == 3.0
+    assert PullbackB3.PARAMS["time_stop_days"] == 40 and PullbackB3.PARAMS["reentry_cooldown_days"] == 10
+    s = PullbackB3()
+    s.nifty_ret126 = {DAY.date(): 0.05}
+    (c,) = s.candidates(DAY, rows(AAA=b2_row(low3=100.5)))
+    assert c.stop == pytest.approx(101.0 - 1.5 * 2.0)  # B2's 1.5-ATR minimum stop kept
+
+
+def test_b3_has_no_target_exit():
+    from aitrader.backtest.strategies.pullback_b3 import PullbackB3
+    up = [FLAT] * 20 + [(100 + 2 * k, 101 + 2 * k, 99 + 2 * k, 100 + 2 * k, 1e6) for k in range(1, 20)]
+    df = prep(up)
+    days = list(df.index)
+
+    class One(PullbackB3):
+        def candidates(self, day, rows_):
+            return [Candidate("AAA", LONG, day.date(), 100.0, 97.0, 1.0, "t", {"atr14": 2.0})] \
+                if day == days[19] else []
+
+    (t,) = simulate({"AAA": df}, days, One(), MoneyRules(), COSTS).trades
+    assert t.exit_reason == "end_of_test" and t.target == float("inf") and t.r_multiple > 2  # ran past 2R

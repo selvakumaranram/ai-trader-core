@@ -20,6 +20,8 @@ from aitrader.backtest.types import LONG, Candidate, EquityPoint, MoneyRules, Tr
 # A flagged price jump (e.g. an unadjusted bonus) corrupts ~200 trading days of indicators that follow it.
 FLAG_LOOKBACK = timedelta(days=300)
 MIN_FILL_FRACTION = 0.5  # skip entries that cash can fund at less than half the intended size
+STOP_EXITS = {"stop", "stop_gap", "stop_same_day"}  # exits that start a re-entry cooldown (not trail/target/time)
+OPEN_EXITS = {"stop_gap", "target_gap", "rank_exit"}  # sold at the open: that day's high came after the exit
 _EMPTY = pd.DataFrame(columns=["open", "high", "low", "close", "volume", "bars", "value20"])
 
 
@@ -52,6 +54,7 @@ class _Position:
     sizing: dict = field(default_factory=dict)
     highest_close: float = 0.0  # highest close since entry (the entry day's close included, not the fill)
     rank_exit: bool = False  # set at a weekly signal day's close: sell at the next open
+    max_high: float = 0.0  # highest high while held (for MFE)
 
 
 def day_slices(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp]) -> Dict[pd.Timestamp, pd.DataFrame]:
@@ -74,6 +77,8 @@ def _close(pos: _Position, day: date, price: float, reason: str, costs: CostMode
     risk = total * (pos.entry_price - pos.cand.stop)
     exit_price = fill if not pos.sold_shares else (pos.sold_value + value) / total
     facts = {**pos.cand.facts, **pos.sizing}
+    if pos.max_high > 0:  # max favourable excursion: the best high reached while held, in R of the initial risk
+        facts["mfe_r"] = round((pos.max_high - pos.entry_price) / (pos.entry_price - pos.cand.stop), 4)
     if pos.partial:
         facts["partial"] = pos.partial
     trade = Trade(pos.cand.symbol, pos.cand.signal_date, pos.entry_date, pos.entry_price, total, pos.cand.stop,
@@ -95,6 +100,10 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
     time_stop = params["time_stop_days"] if trail or atr_trail else money.time_stop_days
     signal_days = week_end_days(days) if getattr(strategy, "signal_frequency", "daily") == "weekly" else None
     entry_check = getattr(strategy, "entry_check", None)  # strategy-specific check once the fill is known
+    cooldown = (money.reentry_cooldown_days if money.reentry_cooldown_days is not None
+                else params.get("reentry_cooldown_days", 0))
+    last_stop: Dict[str, int] = {}  # symbol → day index of its latest stop exit
+    signal_vol: Dict[str, float] = {}  # symbol → ATR(14) ÷ close on the signal day
     regime = regime or {}
     guard = (DrawdownGuard(money.max_drawdown_pause, money.pause_min_days, money.capital)
              if money.max_drawdown_pause else None)
@@ -134,6 +143,9 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 continue
             if cand.symbol in positions:
                 skips["already_held"] += 1
+                continue
+            if cooldown and cand.symbol in last_stop and i - last_stop[cand.symbol] <= cooldown:
+                skips["cooldown_after_stop"] += 1
                 continue
             if len(positions) >= money.max_positions:
                 skips["no_slot"] += 1
@@ -185,7 +197,8 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 cand, d, fill, shares, planned_target(fill, cand.stop, reward), charges, fill, stop=cand.stop,
                 sizing={"risk_amount": round(risk_amount, 2), "intended_shares": intended, "size_cut": cut,
                         "regime_on": regime_on(cand.signal_date), "charge_to_risk": round(charge_ratio, 5),
-                        "entry_open": open_, "signal_close": cand.signal_close})
+                        "entry_open": open_, "signal_close": cand.signal_close,
+                        "atr_pct": signal_vol.get(cand.symbol)})
         pending = []
 
         # 2. exits
@@ -224,7 +237,11 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                                  days_held=pos.days_held, time_stop=time_stop)
             if hit is None and i == last:
                 hit = (bar[3], "end_of_test")
+            if not (hit and hit[1] in OPEN_EXITS):
+                pos.max_high = max(pos.max_high, bar[1])
             if hit:
+                if hit[1] in STOP_EXITS:
+                    last_stop[symbol] = i
                 trade, proceeds = _close(pos, d, hit[0], hit[1], costs)
                 cash += proceeds
                 realised += trade.pnl
@@ -254,6 +271,8 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 for symbol, pos in positions.items():
                     pos.rank_exit = symbol not in keep
             pending = strategy.candidates(day, eligible)
+            signal_vol = {c.symbol: _col(today, c.symbol, "atr14") / float(today.at[c.symbol, "close"])
+                          for c in pending if c.symbol in today.index}
             if money.regime_filter and not regime_on(d):
                 blocked_longs = [c for c in pending if c.direction == LONG]
                 skips["regime_off"] += len(blocked_longs)

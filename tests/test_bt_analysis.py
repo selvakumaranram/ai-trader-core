@@ -96,3 +96,40 @@ def test_comparison_shows_days_invested():
     md = comparison_markdown([("C-base", {"summary": {**summary(0.1), "earlier": {**summary(0.1)["earlier"],
                                                                                   "pct_days_invested": 0.148}}})])
     assert "% days invested" in md and "14.8%" in md
+
+
+def vol_trade(atr_pct, symbol="AAA", period="earlier", pnl=40.0, mfe=None, exit_reason="stop"):
+    t = trade(period=period, pnl=pnl)
+    t.update(symbol=symbol, exit_reason=exit_reason)
+    t["facts"].update(atr_pct=atr_pct, mfe_r=mfe)
+    return t
+
+
+def test_volatility_table_buckets_atr_over_close_at_entry():
+    from aitrader.backtest.analysis import volatility_table, vol_bucket
+    assert [vol_bucket(v) for v in (0.019, 0.02, 0.035, 0.05, 0.061)] == ["<2%", "2–3%", "3–4%", "4–6%", ">6%"]
+    rows = volatility_table([vol_trade(0.07), vol_trade(0.07, period="unseen", pnl=-50), vol_trade(None)])
+    by = {(r["bucket"], r["period"]): r for r in rows}
+    assert by[(">6%", "earlier")]["trades"] == 1 and by[(">6%", "unseen")]["win_rate"] == 0.0
+    assert ("unknown", "earlier") in by
+
+
+def test_top_stocks_and_top_five_share():
+    from aitrader.backtest.analysis import top_stocks
+    ts = ([vol_trade(0.03, "PRESTIGE", pnl=100)] * 3 + [vol_trade(0.03, "IDEA", pnl=-40)] * 2
+          + [vol_trade(0.03, f"S{i}", pnl=10) for i in range(10)])
+    out = top_stocks(ts)
+    assert [r["symbol"] for r in out["rows"]][:2] == ["PRESTIGE", "IDEA"] and len(out["rows"]) == 10
+    assert out["rows"][0]["trades"] == 3 and out["rows"][0]["pnl"] == 300 and out["rows"][1]["win_rate"] == 0.0
+    total = 300 - 80 + 100
+    top5 = 300 + 10 + 10 + 10 + 10  # the five biggest contributors by ₹ P&L
+    assert out["top5_pnl"] == top5 and out["total_pnl"] == total and out["top5_share"] == pytest.approx(top5 / total)
+
+
+def test_mfe_by_exit_reason():
+    from aitrader.backtest.analysis import mfe_by_exit
+    rows = mfe_by_exit([vol_trade(0.03, mfe=2.0, exit_reason="time"), vol_trade(0.03, mfe=1.0, exit_reason="time"),
+                        vol_trade(0.03, mfe=0.2, exit_reason="stop"), vol_trade(0.03, exit_reason="stop")])
+    by = {r["exit_reason"]: r for r in rows}
+    assert by["time"]["avg_mfe_r"] == pytest.approx(1.5) and by["time"]["trades"] == 2
+    assert by["stop"]["avg_mfe_r"] == pytest.approx(0.2) and by["stop"]["with_mfe"] == 1

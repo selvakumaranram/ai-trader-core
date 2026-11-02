@@ -11,7 +11,8 @@ from aitrader.backtest import analysis
 NAMES = {"momentum": "A — Momentum", "pullback": "B — Trend pullback", "breakout": "C — Breakout",
          "price_action": "D — Price action", "momentum_a2": "A2 — Medium-term momentum",
          "pullback_b2": "B2 — Trend pullback, volatility-based stop",
-         "breakout_c2": "C2 — Breakout, entry-checked, trailing exit"}
+         "breakout_c2": "C2 — Breakout, entry-checked, trailing exit",
+         "pullback_b3": "B3 — Trend pullback, let winners run"}
 
 RULES = {
     "pullback": """\
@@ -118,6 +119,15 @@ A stock becomes a candidate at the day's close when **all** of these are true:
 **Ranking for free slots:** strongest volume surge first.
 For NIFTY / BANKNIFTY the table uses C's original index rules and is for research only."""
 
+RULES["pullback_b3"] = RULES["pullback_b2"].replace(
+    "**Idea:** strategy B's pullback entry, with a stop sized to the stock's normal daily movement and a filter for\n"
+    "stocks stronger than the market.",
+    "**Idea:** B2's entry exactly, but let winners run: no fixed target, a trailing stop, a longer time stop, and no\n"
+    "quick re-entry into a stock that just stopped out.") + """
+
+**Exits:** no target; trailing stop 3 × ATR(14) below the highest close since entry; time stop 40 trading days.
+**Re-entry cooldown:** after a stock exits on a stop or stop gap, no new entry in that stock for 10 trading days."""
+
 SKIP_NOTES = {
     "regime_off": "NIFTY 50 closed at or below its 200-day average on the signal day (long entries only)",
     "charges_too_high": "estimated round-trip charges + slippage were more than the allowed share of the rupees "
@@ -125,9 +135,10 @@ SKIP_NOTES = {
     "drawdown_pause": "equity was too far below its peak (new entries paused)",
     "stop_distance_at_entry": "entry − stop at the actual entry price was outside 1–3 × ATR",
     "weaker_than_nifty": "the stock's 126-day return did not beat NIFTY 50's",
+    "cooldown_after_stop": "the stock stopped out within the re-entry cooldown",
 }
 
-TRAILING = {"momentum_a2", "breakout_c2"}  # no fixed target: trailing stop + time stop
+TRAILING = {"momentum_a2", "breakout_c2", "pullback_b3"}  # no fixed target: trailing stop + time stop
 
 QUESTIONS = [
     "Compare profit before and after charges. What does the gap say about trade size, stop distance and the "
@@ -254,6 +265,10 @@ def report_markdown(run: dict) -> str:
     charge = money.get("max_charge_to_risk")
     add(f"| Max charges ÷ risk | {'Off' if charge is None else pct(charge)} |")
     dd = money.get("max_drawdown_pause")
+    cooldown = money.get("reentry_cooldown_days")
+    if cooldown is None:
+        cooldown = strategy_params.get("reentry_cooldown_days", 0)
+    add(f"| Re-entry cooldown after a stop | {f'{cooldown} trading days' if cooldown else 'Off'} |")
     add(f"| Drawdown pause | {'Off' if dd is None else pct(dd) + ' below peak, min ' + plain(money.get('pause_min_days', 10)) + ' trading days'} |")
     if is_a2:
         add(f"| Initial stop (× ATR14) | {plain(strategy_params.get('stop_atr'))} |")
@@ -264,6 +279,13 @@ def report_markdown(run: dict) -> str:
     elif run["strategy"] == "breakout_c2":
         add(f"| Stop distance at entry (× ATR14) | {plain(strategy_params.get('entry_min_atr'))}–"
             f"{plain(strategy_params.get('entry_max_atr'))} |")
+        add(f"| Trailing stop (× ATR14 below highest close) | {plain(strategy_params.get('trail_atr'))} |")
+        add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
+    elif run["strategy"] == "pullback_b3":
+        add(f"| Stop never closer than (× ATR14) | {plain(strategy_params.get('stop_atr'))} |")
+        add(f"| Stop distance at entry (× ATR14) | {plain(strategy_params.get('entry_min_atr'))}–"
+            f"{plain(strategy_params.get('entry_max_atr'))} |")
+        add(f"| Relative strength lookback (days) | {plain(strategy_params.get('rs_days'))} |")
         add(f"| Trailing stop (× ATR14 below highest close) | {plain(strategy_params.get('trail_atr'))} |")
         add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
     elif run["strategy"] == "pullback_b2":
@@ -417,6 +439,26 @@ def _edge_sections(add, L: List[str], trades: List[dict], s: dict) -> None:
                 f"{pct(d.get('max'))} |")
         add("")
 
+    add("### Max favourable excursion by exit (best high while held, in R — how much profit was given back)\n")
+    add("| Exit | Trades | Avg MFE (R) | Avg final R |\n|---|---|---|---|")
+    L.extend(f"| {r['exit_reason'].replace('_', ' ')} | {r['trades']} | {num(r['avg_mfe_r'])} | {num(r['avg_r'])} |"
+             for r in analysis.mfe_by_exit(trades))
+    add("")
+
+    add("### By stock volatility at entry (ATR(14) ÷ close on the signal day)\n")
+    add("| Volatility | Period | Trades | Win rate | Gross R | Net R |\n|---|---|---|---|---|---|")
+    L.extend(f"| {r['bucket']} | {r['period']} | {r['trades']} | {pct(r['win_rate'])} | {num(r['gross_r'])} | "
+             f"{num(r['net_r'])} |" for r in analysis.volatility_table(trades))
+    add("")
+
+    top = analysis.top_stocks(trades)
+    add("### Most-traded stocks\n")
+    add("| Stock | Trades | Win rate | Net R per trade | ₹ P&L |\n|---|---|---|---|---|")
+    L.extend(f"| {r['symbol']} | {r['trades']} | {pct(r['win_rate'])} | {num(r['net_r'])} | {rupees(r['pnl'])} |"
+             for r in top["rows"])
+    add(f"\nThe 5 stocks that made the most money made {rupees(top['top5_pnl'])} of the {rupees(top['total_pnl'])} "
+        f"total P&L ({pct(top['top5_share'])}).\n")
+
     add("### Position size\n")
     add(f"- Average position value: **{rupees(size['avg_position_value'])}**")
     add(f"- Trades cut below the intended risk: **{pct(size['pct_cut'])}** ({size['cut_by_cap']} by the "
@@ -448,8 +490,12 @@ TRADE_COLUMNS = ["symbol", "signal_date", "entry_date", "entry_price", "shares",
                  "exit_price", "exit_reason", "charges", "pnl", "r_multiple", "period", "reason"]
 
 
+FACT_COLUMNS = ["mfe_r", "atr_pct"]  # from each trade's recorded facts (blank for older runs)
+
+
 def trades_csv(run: dict) -> str:
-    return _csv(TRADE_COLUMNS, run["trades"], lambda t, h: t[h])
+    return _csv(TRADE_COLUMNS + FACT_COLUMNS, run["trades"],
+                lambda t, h: t[h] if h in t else (t.get("facts") or {}).get(h))
 
 
 EQUITY_COLUMNS = {"date": "trade_date", "cash": "cash", "invested_value": "invested_value", "equity": "equity",

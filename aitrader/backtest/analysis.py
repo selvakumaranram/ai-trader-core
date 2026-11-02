@@ -81,6 +81,58 @@ def entry_gap_table(trades: Sequence[dict]) -> List[dict]:
     return out
 
 
+VOL_BUCKETS = ((0.02, "<2%"), (0.03, "2–3%"), (0.04, "3–4%"), (0.06, "4–6%"), (float("inf"), ">6%"))
+
+
+def vol_bucket(atr_pct: float) -> str:
+    return next(label for upper, label in VOL_BUCKETS if atr_pct < upper)
+
+
+def _facts(t: dict) -> dict:
+    return t.get("facts") or {}
+
+
+def volatility_table(trades: Sequence[dict]) -> List[dict]:
+    """Trades by the stock's ATR(14) ÷ close on the signal day."""
+    def label(t):
+        v = _facts(t).get("atr_pct")
+        return "unknown" if v is None else vol_bucket(float(v))
+    out = []
+    for bucket in [b for _, b in VOL_BUCKETS] + ["unknown"]:
+        for period in PERIODS:
+            group = [t for t in trades if t["period"] == period and label(t) == bucket]
+            if group:
+                r = r_split(group)
+                out.append({"bucket": bucket, "period": period, "trades": len(group), "win_rate": _win_rate(group),
+                            "gross_r": r["gross_r"], "net_r": r["net_r"]})
+    return out
+
+
+def top_stocks(trades: Sequence[dict], n: int = 10) -> dict:
+    """The n most-traded stocks, and how much of the total ₹ P&L the five biggest contributors made."""
+    by: dict = {}
+    for t in trades:
+        by.setdefault(t["symbol"], []).append(t)
+    rows = [{"symbol": sym, "trades": len(g), "win_rate": _win_rate(g),
+             "net_r": _mean([_f(t, "r_multiple") for t in g]), "pnl": sum(_f(t, "pnl") for t in g)}
+            for sym, g in by.items()]
+    total = sum(r["pnl"] for r in rows)
+    top5 = sum(sorted((r["pnl"] for r in rows), reverse=True)[:5])
+    return {"rows": sorted(rows, key=lambda r: (-r["trades"], r["symbol"]))[:n], "total_pnl": total,
+            "top5_pnl": top5, "top5_share": top5 / total if total > 0 else None}
+
+
+def mfe_by_exit(trades: Sequence[dict]) -> List[dict]:
+    """Average max favourable excursion (best high while held, in R) and final R, by exit reason."""
+    out = []
+    for reason in sorted({t["exit_reason"] for t in trades}):
+        group = [t for t in trades if t["exit_reason"] == reason]
+        mfes = [float(_facts(t)["mfe_r"]) for t in group if _facts(t).get("mfe_r") is not None]
+        out.append({"exit_reason": reason, "trades": len(group), "with_mfe": len(mfes), "avg_mfe_r": _mean(mfes),
+                    "avg_r": _mean([_f(t, "r_multiple") for t in group])})
+    return sorted(out, key=lambda r: -r["trades"])
+
+
 def _regime(t: dict) -> str:
     on = (t.get("facts") or {}).get("regime_on")
     return "unknown" if on is None else ("above" if on else "below")

@@ -17,18 +17,20 @@ OLD_MONEY = MoneyRules()  # ₹20,000, fixed ₹400 risk, 3 positions, ₹7,000 
 SMALL_MONEY = replace(NEW_RUN_MONEY, capital=20_000.0, max_position_value=7_000.0)
 STUDY_START, STUDY_END = date(2017, 8, 14), date(2026, 10, 30)
 
-# A money spec is MoneyRules, or ("run33", overrides): run #33's stored money settings with some values replaced.
-RUN_33 = 33
-MoneySpec = Union[MoneyRules, Tuple[str, dict]]
+# A money spec is MoneyRules, or ("run", id, overrides): that run's stored money settings with some replaced.
+MoneySpec = Union[MoneyRules, Tuple[str, int, dict]]
 
 
-def resolve_money(conn, spec: MoneySpec, run_33: int = RUN_33) -> MoneyRules:
+def resolve_money(conn, spec: MoneySpec, remap: Optional[Dict[int, int]] = None) -> MoneyRules:
+    """remap points a referenced run id at another run (tests)."""
     if isinstance(spec, MoneyRules):
         return spec
-    row = repo.backtest_run_row(conn, run_33)
+    _, run_id, overrides = spec
+    run_id = (remap or {}).get(run_id, run_id)
+    row = repo.backtest_run_row(conn, run_id)
     if row is None:
-        raise RuntimeError(f"run #{run_33} not found: its money settings are needed for this study")
-    return MoneyRules(**{**row["params"]["money"], **spec[1]})
+        raise RuntimeError(f"run #{run_id} not found: its money settings are needed for this study")
+    return MoneyRules(**{**row["params"]["money"], **overrides})
 
 
 # (label, strategy, money, run id the baseline must reproduce)
@@ -38,15 +40,20 @@ STUDIES: Dict[str, List[Tuple[str, str, MoneySpec, Optional[int]]]] = {
     "b": [("B-base", "pullback", OLD_MONEY, 22), ("B-fix", "pullback", NEW_RUN_MONEY, None),
           ("B2-100k", "pullback_b2", NEW_RUN_MONEY, None), ("B2-20k", "pullback_b2", SMALL_MONEY, None)],
     # C fix (charge check 0.15) plus the A/B runs that the 0.05 check also distorted
-    "c": [("C-base", "breakout", ("run33", {}), RUN_33),
-          ("C-fix", "breakout", ("run33", {"max_charge_to_risk": 0.15}), None),
+    "c": [("C-base", "breakout", ("run", 33, {}), 33),
+          ("C-fix", "breakout", ("run", 33, {"max_charge_to_risk": 0.15}), None),
           ("C2-100k", "breakout_c2", NEW_RUN_MONEY, None), ("C2-20k", "breakout_c2", SMALL_MONEY, None),
           ("A-fix", "momentum", NEW_RUN_MONEY, None), ("A2-100k", "momentum_a2", NEW_RUN_MONEY, None),
           ("B-fix", "pullback", NEW_RUN_MONEY, None), ("B2-100k", "pullback_b2", NEW_RUN_MONEY, None)],
+    # B3: B2 at the 0.05 check (run #36), B2 at 0.15, then B3 with winners allowed to run
+    "b3": [("B2-base", "pullback_b2", ("run", 36, {}), 36),
+           ("B2-c15", "pullback_b2", ("run", 36, {"max_charge_to_risk": 0.15}), None),
+           ("B3-100k", "pullback_b3", NEW_RUN_MONEY, None), ("B3-20k", "pullback_b3", SMALL_MONEY, None)],
 }
 
 
-TITLES = {"c": "Combined comparison — C runs and the A/B runs re-run with the 0.15 charge check"}
+TITLES = {"c": "Combined comparison — C runs and the A/B runs re-run with the 0.15 charge check",
+          "b3": "Combined comparison — B2 at both charge checks and B3"}
 
 
 def reproduction_line(label: str, summary: dict, ref_id: int, ref_summary: Optional[dict]) -> str:

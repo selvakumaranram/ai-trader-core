@@ -37,6 +37,7 @@ class MoneyRules:
     max_charge_to_risk: Optional[float] = None  # skip when estimated round-trip charges ÷ ₹ risked exceed this
     max_drawdown_pause: Optional[float] = None  # stop new entries this far below peak equity
     pause_min_days: int = 10
+    reentry_cooldown_days: Optional[int] = None  # None = the strategy's default (B3: 10); 0 = off
 
 
 NEW_RUN_MONEY = MoneyRules(capital=100_000.0, risk_per_trade=1_000.0, daily_loss_limit=3_000.0, max_positions=5,

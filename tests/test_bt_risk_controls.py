@@ -195,3 +195,77 @@ def test_skipped_charge_ratios_are_collected():
 def test_charge_ratio_recorded_even_with_the_check_off():
     res, _ = run({"AAA": prep([FLAT] * 4)}, {0: [("AAA", 100, 95, 1.0)]})
     assert res.trades[0].facts["charge_to_risk"] > 0 and res.charge_ratios_skipped == []
+
+
+# --- re-entry cooldown, MFE, volatility at entry -----------------------------------------------------------------
+
+STOPPED = (100, 101, 94, 95, 1e6)   # entry-day low touches the stop at 95
+TARGET = (100, 111, 99, 110, 1e6)    # entry-day high reaches the 2R target (110.15)
+
+
+def _aaa_after(first_bar, n=16):
+    return prep([FLAT, first_bar] + [FLAT] * (n - 2))
+
+
+@pytest.mark.parametrize("signal_index,blocked", [(5, True), (10, True), (11, False)])
+def test_cooldown_blocks_reentry_for_ten_trading_days_after_a_stop(signal_index, blocked):
+    money = MoneyRules(reentry_cooldown_days=10)
+    res, days = run({"AAA": _aaa_after(STOPPED)}, {0: [("AAA", 100, 95, 1.0)],
+                                                   signal_index: [("AAA", 100, 95, 1.0)]}, money=money)
+    assert res.trades[0].exit_reason == "stop" and res.trades[0].exit_date == days[1].date()
+    if blocked:  # entry would be at signal_index + 1, i.e. ≤ 10 trading days after the stop on day 1
+        assert len(res.trades) == 1 and res.skips == {"cooldown_after_stop": 1}
+    else:
+        assert len(res.trades) == 2 and res.trades[1].entry_date == days[signal_index + 1].date()
+
+
+def test_no_cooldown_after_a_target_exit():
+    res, _ = run({"AAA": _aaa_after(TARGET)}, {0: [("AAA", 100, 95, 1.0)], 2: [("AAA", 100, 95, 1.0)]},
+                 money=MoneyRules(reentry_cooldown_days=10))
+    assert [t.exit_reason for t in res.trades][0] == "target" and len(res.trades) == 2 and res.skips == {}
+
+
+def test_no_cooldown_after_a_time_exit():
+    res, days = run({"AAA": prep([FLAT] * 30)}, {0: [("AAA", 100, 95, 1.0)], 22: [("AAA", 100, 95, 1.0)]},
+                    money=MoneyRules(reentry_cooldown_days=10))
+    assert res.trades[0].exit_reason == "time" and len(res.trades) == 2 and res.skips == {}
+
+
+def test_cooldown_off_by_default_and_strategy_default_applies():
+    res, _ = run({"AAA": _aaa_after(STOPPED)}, {0: [("AAA", 100, 95, 1.0)], 3: [("AAA", 100, 95, 1.0)]})
+    assert len(res.trades) == 2  # MoneyRules() has no cooldown and the scripted strategy sets none
+    days = list(_aaa_after(STOPPED).index)
+
+    class Cooling(Scripted):
+        PARAMS = {"reentry_cooldown_days": 10}
+
+    plan = {days[0]: [Candidate("AAA", LONG, days[0].date(), 100, 95, 1.0, "t", {})],
+            days[3]: [Candidate("AAA", LONG, days[3].date(), 100, 95, 1.0, "t", {})]}
+    res = simulate({"AAA": _aaa_after(STOPPED)}, days, Cooling(plan), MoneyRules(), COSTS)
+    assert len(res.trades) == 1 and res.skips == {"cooldown_after_stop": 1}
+    res = simulate({"AAA": _aaa_after(STOPPED)}, days, Cooling(plan), MoneyRules(reentry_cooldown_days=0), COSTS)
+    assert len(res.trades) == 2  # an explicit 0 in the money settings switches the strategy default off
+
+
+def test_mfe_uses_only_prices_between_entry_and_exit():
+    rows = [FLAT, (100, 103, 99, 102, 1e6), (102, 108, 101, 104, 1e6), (104, 105, 94, 95, 1e6), (95, 150, 94, 96, 1e6)]
+    res, _ = run({"AAA": prep(rows)}, {0: [("AAA", 100, 95, 1.0)]})
+    (t,) = res.trades
+    assert t.exit_reason == "stop"
+    assert t.facts["mfe_r"] == pytest.approx((108 - t.entry_price) / (t.entry_price - 95), abs=1e-4)  # not 150 (stored to 4 dp)
+
+
+def test_mfe_excludes_the_exit_day_high_when_exiting_at_the_open():
+    rows = [FLAT, (100, 103, 99, 102, 1e6), (90, 140, 89, 91, 1e6), FLAT]  # gaps below the stop: exit at the open
+    (t,) = run({"AAA": prep(rows)}, {0: [("AAA", 100, 95, 1.0)]})[0].trades
+    assert t.exit_reason == "stop_gap"
+    assert t.facts["mfe_r"] == pytest.approx((103 - t.entry_price) / (t.entry_price - 95), abs=1e-4)
+
+
+def test_volatility_at_entry_is_the_signal_day_atr_over_close():
+    df = prep([FLAT] * 16 + [(100, 130, 70, 100, 1e6)])  # the entry day's huge range must not count
+    days = list(df.index)
+    res = simulate({"AAA": df}, days, Scripted({days[15]: [Candidate("AAA", LONG, days[15].date(), 100, 95, 1.0,
+                                                                       "t", {})]}), MoneyRules(), COSTS)
+    (t,) = res.trades
+    assert t.facts["atr_pct"] == pytest.approx(float(df["atr14"].iloc[15]) / 100)
