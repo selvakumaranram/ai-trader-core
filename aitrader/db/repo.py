@@ -436,12 +436,13 @@ def latest_bar_ingested_at(conn: Connection, source: str):
 # --- shadow trading ------------------------------------------------------------------------------------------
 
 def insert_shadow_signal(conn: Connection, *, signal_date: date, rule: str, side: str, close: float, stop: float,
-                         target: float, reason: str, facts: dict) -> Optional[int]:
-    """The new signal's id, or None when this rule already has a signal for that day."""
+                         target: Optional[float], reason: str, facts: dict, underlying: str = "NIFTY"
+                         ) -> Optional[int]:
+    """The new signal's id, or None when this rule already has a signal for that day and symbol."""
     stmt = (pg_insert(shadow_signals)
             .values(signal_date=signal_date, rule=rule, side=side, close=close, stop=stop, target=target,
-                    reason=reason, facts=facts)
-            .on_conflict_do_nothing(index_elements=["signal_date", "rule"])
+                    reason=reason, facts=facts, underlying=underlying)
+            .on_conflict_do_nothing(index_elements=["signal_date", "rule", "underlying"])
             .returning(shadow_signals.c.id))
     return conn.execute(stmt).scalar()
 
@@ -463,6 +464,10 @@ def mark_missed_shadow_signals(conn: Connection, *, before: date) -> int:
     return conn.execute(update(shadow_signals).where(shadow_signals.c.status == "new",
                                                      shadow_signals.c.signal_date < before)
                         .values(status="missed")).rowcount
+
+
+def set_shadow_signal_status(conn: Connection, signal_id: int, status: str, note: str = "") -> None:
+    conn.execute(update(shadow_signals).where(shadow_signals.c.id == signal_id).values(status=status, note=note))
 
 
 def set_shadow_view(conn: Connection, signal_id: int, view: Optional[str]) -> bool:
