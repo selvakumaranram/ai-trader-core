@@ -381,3 +381,11 @@ def test_wednesday_signal_days_fall_back_to_the_last_trading_day_before_it():
     assert week_signal_days(days, 2) == {pd.Timestamp("2025-11-05"), pd.Timestamp("2025-11-11")}
     assert week_signal_days(days, None) == {pd.Timestamp("2025-11-07"), pd.Timestamp("2025-11-14"),
                                             pd.Timestamp("2025-11-21")}
+
+
+def test_a3_is_a2_with_the_a3_best_settings():
+    from aitrader.backtest.strategies.momentum_a3 import MomentumA3
+    assert issubclass(MomentumA3, MomentumA2) and STRATEGIES["momentum_a3"] is MomentumA3
+    assert MomentumA3.PARAMS["time_stop_days"] is None and MomentumA3.PARAMS["keep_top"] == 50
+    assert {k: v for k, v in MomentumA3.PARAMS.items() if k not in ("time_stop_days", "keep_top")} == \
+        {k: v for k, v in MomentumA2.PARAMS.items() if k not in ("time_stop_days", "keep_top")}

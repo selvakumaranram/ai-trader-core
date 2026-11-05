@@ -13,7 +13,8 @@ NAMES = {"momentum": "A — Momentum", "pullback": "B — Trend pullback", "brea
          "pullback_b2": "B2 — Trend pullback, volatility-based stop",
          "breakout_c2": "C2 — Breakout, entry-checked, trailing exit",
          "pullback_b3": "B3 — Trend pullback, let winners run",
-         "breakout_c3": "C3 — Breakout, trend-confirmed"}
+         "breakout_c3": "C3 — Breakout, trend-confirmed",
+         "momentum_a3": "A3 — Medium-term momentum (A3-best)"}
 
 RULES = {
     "pullback": """\
@@ -138,6 +139,11 @@ RULES["breakout_c3"] = RULES["breakout_c2"].replace(
 averages on the signal day. **Re-entry cooldown:** 10 trading days after a stop or stop gap in the same stock.
 **Exits:** no target; trailing stop 3 × ATR(14) below the highest close since entry; time stop 40 trading days."""
 
+RULES["momentum_a3"] = RULES["momentum_a2"] + """
+
+**A3 changes (chosen in the A3 study using the earlier years only):** no time stop, and a holding is kept while it
+stays in the top 50 by score (A2 uses the top 30)."""
+
 SKIP_NOTES = {
     "regime_off": "NIFTY 50 closed at or below its 200-day average on the signal day (long entries only)",
     "charges_too_high": "estimated round-trip charges + slippage were more than the allowed share of the rupees "
@@ -149,7 +155,7 @@ SKIP_NOTES = {
     "short_regime_off": "NIFTY 50 was not above both its 50- and 200-day averages on the signal day",
 }
 
-TRAILING = {"momentum_a2", "breakout_c2", "pullback_b3", "breakout_c3"}  # no fixed target: trailing stop + time stop
+TRAILING = {"momentum_a2", "breakout_c2", "pullback_b3", "breakout_c3", "momentum_a3"}  # no fixed target: trailing stop + time stop
 
 QUESTIONS = [
     "Compare profit before and after charges. What does the gap say about trade size, stop distance and the "
@@ -233,7 +239,7 @@ def report_markdown(run: dict) -> str:
            if percent else ""))
     strategy_params = (run.get("params") or {}).get("strategy") or {}
     is_d = run["strategy"] == "price_action"
-    is_a2 = run["strategy"] == "momentum_a2"
+    is_a2 = run["strategy"] in ("momentum_a2", "momentum_a3")
     trailing = run["strategy"] in TRAILING
     if trailing:
         add(f"- **No fixed target.** After each close the stop becomes max(previous stop, highest close since "
