@@ -89,7 +89,7 @@ def parse_answer(text: str, ids: Set[int]) -> Dict[int, Tuple[bool, str]]:
 class GeminiClient:
     """Google Gemini over plain HTTPS. The key travels in a header (never in the URL) and is never logged."""
 
-    def __init__(self, api_key: str, model: str, timeout: float = 60.0):
+    def __init__(self, api_key: str, model: str, timeout: float = 120.0):
         self._key, self.model, self._timeout = api_key, model, timeout
 
     def ask(self, prompt: str) -> str:
@@ -104,6 +104,8 @@ class GeminiClient:
             raise RuntimeError(f"Gemini returned HTTP {exc.code}") from None
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Gemini not reachable ({exc.reason.__class__.__name__})") from None
+        except (TimeoutError, OSError):
+            raise RuntimeError(f"Gemini timed out after {self._timeout:.0f}s") from None
         try:
             return data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError, TypeError):

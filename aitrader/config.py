@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     token_encryption_key: SecretStr = SecretStr("")
     dashboard_url: str = "http://localhost:5173"
     gemini_api_key: SecretStr = SecretStr("")  # AI picks (pretend portfolio only)
-    ai_model: str = "gemini-2.5-flash"
+    ai_model: str = "gemini-3.8-flash"  # gemini-2.5-flash is closed to new keys
 
     @field_validator("host")
     @classmethod

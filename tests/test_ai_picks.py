@@ -136,3 +136,16 @@ def test_ai_picks_is_scheduled_after_the_scan():
     names = [n for n, _, _ in scheduler.SCHEDULE]
     assert names.index("ai_picks") > names.index("shadow_scan")
     assert "ai_picks" not in scheduler.NEEDS_LOGIN
+
+
+def test_gemini_client_turns_a_timeout_into_a_clean_error(monkeypatch):
+    def slow(*args, **kwargs):
+        raise TimeoutError("The read operation timed out")
+    monkeypatch.setattr(A.urllib.request, "urlopen", slow)
+    with pytest.raises(RuntimeError, match="timed out"):
+        A.GeminiClient("k", "m").ask("p")
+
+
+def test_default_model_is_one_google_still_offers():
+    from aitrader.config import Settings
+    assert Settings(_env_file=None).ai_model == "gemini-3.8-flash"
