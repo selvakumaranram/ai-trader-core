@@ -476,9 +476,33 @@ def set_shadow_view(conn: Connection, signal_id: int, view: Optional[str]) -> bo
 
 
 def insert_shadow_trade(conn: Connection, **values) -> int:
+    """A "mine" (your picks) trade records the outcome in the signal's pick_note; the signal's status stays the
+    rule portfolio's."""
     trade_id = conn.execute(shadow_trades.insert().values(**values).returning(shadow_trades.c.id)).scalar_one()
-    conn.execute(update(shadow_signals).where(shadow_signals.c.id == values["signal_id"]).values(status="entered"))
+    change = {"pick_note": "bought"} if values.get("portfolio", "rule") == "mine" else {"status": "entered"}
+    conn.execute(update(shadow_signals).where(shadow_signals.c.id == values["signal_id"]).values(**change))
     return trade_id
+
+
+def set_shadow_pick_note(conn: Connection, signal_id: int, note: str) -> None:
+    conn.execute(update(shadow_signals).where(shadow_signals.c.id == signal_id).values(pick_note=note))
+
+
+def latest_plain_run(conn: Connection, strategy: str) -> Optional[dict]:
+    """The newest finished run of `strategy` with its standard settings (no overrides, no excluded stocks)."""
+    for row in conn.execute(select(backtest_runs).where(backtest_runs.c.strategy == strategy,
+                                                        backtest_runs.c.status == "ok")
+                            .order_by(backtest_runs.c.id.desc())).mappings():
+        params = row["params"] or {}
+        if not params.get("strategy_overrides") and not params.get("exclude"):
+            return dict(row)
+    return None
+
+
+def backtest_trade_facts(conn: Connection, run_id: int) -> List[dict]:
+    rows = conn.execute(select(backtest_trades.c.r_multiple, backtest_trades.c.facts)
+                        .where(backtest_trades.c.run_id == run_id)).mappings()
+    return [dict(r) for r in rows]
 
 
 def open_shadow_trades(conn: Connection) -> List[dict]:
