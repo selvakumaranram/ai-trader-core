@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import List
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,7 +20,8 @@ class Settings(BaseSettings):
     token_encryption_key: SecretStr = SecretStr("")
     dashboard_url: str = "http://localhost:5173"
     gemini_api_key: SecretStr = SecretStr("")  # AI picks (pretend portfolio only)
-    ai_model: str = "gemini-3.8-flash"  # gemini-2.5-flash is closed to new keys
+    # tried in order when one is busy or slow (gemini-2.5-flash is closed to new keys)
+    ai_models: List[str] = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite"]
 
     @field_validator("host")
     @classmethod

@@ -143,9 +143,50 @@ def test_gemini_client_turns_a_timeout_into_a_clean_error(monkeypatch):
         raise TimeoutError("The read operation timed out")
     monkeypatch.setattr(A.urllib.request, "urlopen", slow)
     with pytest.raises(RuntimeError, match="timed out"):
-        A.GeminiClient("k", "m").ask("p")
+        A.GeminiClient("k", ["m"]).ask("p")
 
 
 def test_default_model_is_one_google_still_offers():
     from aitrader.config import Settings
-    assert Settings(_env_file=None).ai_model == "gemini-3.8-flash"
+    assert Settings(_env_file=None).ai_models == ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite"]
+
+
+class _Resp:
+    def __init__(self, text):
+        self.body = json.dumps({"candidates": [{"content": {"parts": [{"text": text}]}}]}).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def test_gemini_client_moves_to_the_next_model_when_busy_and_records_which_answered(monkeypatch):
+    import io
+    tried = []
+
+    def fake(req, timeout):
+        model = req.full_url.split("/models/")[1].split(":")[0]
+        tried.append(model)
+        if model == "busy":
+            raise A.urllib.error.HTTPError(req.full_url, 503, "busy", {}, io.BytesIO(b"{}"))
+        if model == "slow":
+            raise TimeoutError()
+        return _Resp('{"picks": []}')
+    monkeypatch.setattr(A.urllib.request, "urlopen", fake)
+    c = A.GeminiClient("k", ["busy", "slow", "good", "never"])
+    assert c.ask("p") == '{"picks": []}' and tried == ["busy", "slow", "good"] and c.model == "good"
+
+
+def test_gemini_client_does_not_hide_a_bad_request(monkeypatch):
+    import io
+
+    def fake(req, timeout):
+        raise A.urllib.error.HTTPError(req.full_url, 400, "bad", {}, io.BytesIO(b"{}"))
+    monkeypatch.setattr(A.urllib.request, "urlopen", fake)
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        A.GeminiClient("k", ["a", "b"]).ask("p")

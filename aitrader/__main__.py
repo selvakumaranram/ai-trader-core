@@ -38,7 +38,7 @@ def build_runtime(settings: Settings):
     ai = None
     if key:
         from aitrader.shadow.ai_picks import GeminiClient
-        ai = GeminiClient(key, settings.ai_model)
+        ai = GeminiClient(key, settings.ai_models)
     deps = JobDeps(engine=engine, kite=kite, bar_source=YFinanceSource(), calendar=TradingCalendar.bundled(),
                    on_auth_error=sessions.revoke if sessions else (lambda: None), ai=ai)
     return deps, sessions, (gateway_factory if sessions else None)

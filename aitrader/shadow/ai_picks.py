@@ -87,29 +87,54 @@ def parse_answer(text: str, ids: Set[int]) -> Dict[int, Tuple[bool, str]]:
 
 
 class GeminiClient:
-    """Google Gemini over plain HTTPS. The key travels in a header (never in the URL) and is never logged."""
+    """Google Gemini over plain HTTPS. The key travels in a header (never in the URL) and is never logged.
 
-    def __init__(self, api_key: str, model: str, timeout: float = 120.0):
-        self._key, self.model, self._timeout = api_key, model, timeout
+    `models` are tried in order: when one is busy (HTTP 429/5xx) or too slow, the next one is asked. `model` is the
+    one that answered last (recorded with each pick)."""
+
+    RETRY_ON = {429, 500, 502, 503, 504}
+
+    def __init__(self, api_key: str, models, timeout: float = 120.0):
+        self._key, self._timeout = api_key, timeout
+        self.models = [models] if isinstance(models, str) else list(models)
+        self.model = self.models[0]
 
     def ask(self, prompt: str) -> str:
+        problem = "no model to ask"
+        for model in self.models:
+            try:
+                text = self._ask_one(model, prompt)
+            except _Busy as exc:
+                problem = str(exc)
+                continue
+            self.model = model
+            return text
+        raise RuntimeError(f"every Gemini model was busy or slow (last: {problem})")
+
+    def _ask_one(self, model: str, prompt: str) -> str:
         body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
                            "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}})
-        req = urllib.request.Request(GEMINI_URL.format(model=self.model), data=body.encode("utf-8"), method="POST",
+        req = urllib.request.Request(GEMINI_URL.format(model=model), data=body.encode("utf-8"), method="POST",
                                      headers={"Content-Type": "application/json", "x-goog-api-key": self._key})
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"Gemini returned HTTP {exc.code}") from None
+            if exc.code in self.RETRY_ON:
+                raise _Busy(f"{model} HTTP {exc.code}") from None
+            raise RuntimeError(f"Gemini ({model}) returned HTTP {exc.code}") from None
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"Gemini not reachable ({exc.reason.__class__.__name__})") from None
+            raise _Busy(f"{model} not reachable ({exc.reason.__class__.__name__})") from None
         except (TimeoutError, OSError):
-            raise RuntimeError(f"Gemini timed out after {self._timeout:.0f}s") from None
+            raise _Busy(f"{model} timed out after {self._timeout:.0f}s") from None
         try:
             return data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError, TypeError):
-            raise RuntimeError("Gemini returned no answer text") from None
+            raise RuntimeError(f"Gemini ({model}) returned no answer text") from None
+
+
+class _Busy(Exception):
+    """This model could not answer now; the next one may."""
 
 
 def ai_picks(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
