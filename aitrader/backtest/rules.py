@@ -89,6 +89,27 @@ def atr_trail_stop(stop: float, highest_close: float, atr: float, multiple: floa
     return stop if math.isnan(candidate) else max(stop, candidate)
 
 
+def pressure_exit(params: dict, i: int, days_held: int, close: float, level: Optional[float], ret1: float,
+                  volume: float, vol20: float, heavy_down: List[int]) -> Optional[str]:
+    """Selling-pressure exits checked at the close (sell at the next open). `heavy_down` collects the day indexes of
+    heavy-volume down days while held (mutated here).
+    - failed_breakout_days N: the close is back below the breakout level within N trading days of entry.
+    - distribution_days K: K down closes on >= distribution_volume x the prior 20-day volume within the last
+      distribution_window trading days."""
+    n = params.get("failed_breakout_days")
+    if n is not None and level is not None and days_held <= n and close < level:
+        return "failed_breakout"
+    k = params.get("distribution_days")
+    if k:
+        if ret1 < 0 and vol20 > 0 and volume >= params.get("distribution_volume", 1.5) * vol20:
+            heavy_down.append(i)
+        window = params.get("distribution_window", 10)
+        heavy_down[:] = [d for d in heavy_down if i - d < window]
+        if len(heavy_down) >= k:
+            return "distribution"
+    return None
+
+
 def week_end_days(days: Sequence) -> Set:
     """The last trading day of each ISO week in `days` (a holiday Friday makes Thursday the week's end)."""
     out = set()

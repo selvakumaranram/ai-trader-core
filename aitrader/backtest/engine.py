@@ -13,6 +13,7 @@ from aitrader.backtest.costs import CostModel
 from aitrader.backtest.indicators import MIN_BARS, MIN_TRADED_VALUE
 from aitrader.backtest.rules import (
     DrawdownGuard, RiskScaler, atr_trail_stop, exit_check, gap_skip, next_trail_stop, partial_trail_check, planned_target,
+    pressure_exit,
     risk_shares, round_trip_estimate, size_position, week_signal_days,
 )
 from aitrader.backtest.types import LONG, Candidate, EquityPoint, MoneyRules, Trade
@@ -21,7 +22,7 @@ from aitrader.backtest.types import LONG, Candidate, EquityPoint, MoneyRules, Tr
 FLAG_LOOKBACK = timedelta(days=300)
 MIN_FILL_FRACTION = 0.5  # skip entries that cash can fund at less than half the intended size
 STOP_EXITS = {"stop", "stop_gap", "stop_same_day"}  # exits that start a re-entry cooldown (not trail/target/time)
-OPEN_EXITS = {"stop_gap", "target_gap", "rank_exit", "below_sma200"}  # sold at the open: that day's high came after the exit
+OPEN_EXITS = {"stop_gap", "target_gap", "rank_exit", "below_sma200", "failed_breakout", "distribution"}  # sold at the open: that day's high came after the exit
 _EMPTY = pd.DataFrame(columns=["open", "high", "low", "close", "volume", "bars", "value20"])
 
 
@@ -56,6 +57,8 @@ class _Position:
     highest_close: float = 0.0  # highest close since entry (the entry day's close included, not the fill)
     rank_exit: Union[bool, str] = False  # exit reason set at a weekly signal day's close: sell at the next open
     max_high: float = 0.0  # highest high while held (for MFE)
+    pressure_exit: Optional[str] = None  # selling-pressure exit set at a close: sell at the next open
+    heavy_down: List[int] = field(default_factory=list)  # day indexes of heavy-volume down closes while held
 
 
 def day_slices(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp]) -> Dict[pd.Timestamp, pd.DataFrame]:
@@ -261,6 +264,11 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                     pos.highest_close = max(pos.highest_close, bar[3])
                     pos.stop = atr_trail_stop(pos.stop, pos.highest_close, _col(today, symbol, "atr14"),
                                               params["trail_atr"])
+                    reason = pressure_exit(params, i, pos.days_held, bar[3], pos.cand.facts.get("level"),
+                                           _col(today, symbol, "ret1"), _col(today, symbol, "volume"),
+                                           _col(today, symbol, "vol20_prior"), pos.heavy_down)
+                    if reason:
+                        pos.pressure_exit = reason
             else:
                 hit = exit_check(LONG, bar, pos.cand.stop, pos.target, entry_day=entry_day,
                                  days_held=pos.days_held, time_stop=time_stop)
@@ -347,8 +355,9 @@ def _atr_trail_day(pos: _Position, bar, entry_day: bool, time_stop: int) -> Opti
     """One day of A2's exits: a rank exit sells at the open (a stop gap if the open is already through the stop),
     otherwise the usual stop/gap/time rules against the trailing stop."""
     o = bar[0]
-    if pos.rank_exit and not entry_day:
-        reason = pos.rank_exit if isinstance(pos.rank_exit, str) else "rank_exit"
+    if (pos.rank_exit or pos.pressure_exit) and not entry_day:
+        reason = pos.rank_exit if isinstance(pos.rank_exit, str) else ("rank_exit" if pos.rank_exit
+                                                                        else pos.pressure_exit)
         return (o, "stop_gap") if o <= pos.stop else (o, reason)
     hit = exit_check(LONG, bar, pos.stop, math.inf, entry_day=entry_day, days_held=pos.days_held,
                      time_stop=time_stop)

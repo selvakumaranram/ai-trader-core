@@ -435,3 +435,60 @@ def test_breakout_records_the_signal_high_and_a_plus_raises_the_volume_bar():
     a_plus.PARAMS = {**BreakoutC3.PARAMS, "volume_surge": 3.0}
     assert a_plus.candidates(DAY, rows(AAA=brk_row(volume=2.9e6))) == []
     assert len(a_plus.candidates(DAY, rows(AAA=brk_row(volume=3.1e6)))) == 1
+
+
+# --- Selling-pressure exits (C3 variants) ---------------------------------------------------------------------
+
+class Pressure(WeeklyScripted):
+    exit_policy, signal_frequency = "atr_trail", "daily"
+
+    def __init__(self, plan, **params):
+        super().__init__(plan)
+        self.PARAMS = {"time_stop_days": 40, "trail_atr": 3.0, **params}
+
+    def weekly_exits(self, day, eligible, today, held):
+        return {}
+
+
+def pressure_run(after_entry, **params):
+    """Signal on day 20 (breakout level 100.5, stop 96), entry at day 21's open, then the given bars."""
+    bars = [FLAT] * 20 + [(100, 102, 99, 101, 1e6), (101, 102, 100.6, 101.5, 1e6)] + after_entry + [FLAT] * 3
+    df = add_indicators(frame(bars))
+    days = list(df.index)
+    cand = Candidate("AAA", LONG, days[20].date(), 101.0, 96.0, 1.0, "t", {"level": 100.5, "atr14": 2.0})
+    return simulate({"AAA": df}, days, Pressure({days[20]: [cand]}, **params), MoneyRules(), COSTS), days
+
+
+def test_failed_breakout_sells_at_the_next_open_after_a_close_back_below_the_breakout_level():
+    after = [(101, 101.5, 99.5, 100.0, 1e6), (99.8, 100.5, 99, 100, 1e6)]
+    res, days = pressure_run(after, failed_breakout_days=5)
+    (t,) = res.trades
+    assert t.exit_reason == "failed_breakout" and t.exit_date == days[23].date()
+    assert t.exit_price == pytest.approx(99.8 * (1 - COSTS.slippage))
+
+
+def test_failed_breakout_is_ignored_after_the_window_and_when_switched_off():
+    after = [(101.5, 102, 101, 101.5, 1e6)] * 3 + [(101, 101.5, 99.5, 100.0, 1e6)]  # back below on day 4 held
+    res, _ = pressure_run(after, failed_breakout_days=3)
+    (t,) = res.trades
+    assert t.exit_reason == "end_of_test"
+    res, _ = pressure_run([(101, 101.5, 99.5, 100.0, 1e6)])
+    (t,) = res.trades
+    assert t.exit_reason == "end_of_test"
+
+
+def test_distribution_sells_after_two_heavy_volume_down_days_within_ten_days():
+    after = [(101.5, 102, 100.8, 101.0, 3e6),   # down day, 3x volume
+             (101, 102, 100.8, 101.6, 1e6),     # up day
+             (101.6, 102, 100.6, 100.8, 3e6),   # second heavy down day -> sell next open
+             (100.7, 101, 100, 100.5, 1e6)]
+    res, days = pressure_run(after, distribution_days=2)
+    (t,) = res.trades
+    assert t.exit_reason == "distribution" and t.exit_date == days[25].date()
+
+
+def test_distribution_ignores_down_days_on_normal_volume():
+    after = [(101.5, 102, 100.8, 101.0, 1.2e6), (101, 102, 100.8, 101.6, 1e6), (101.6, 102, 100.6, 100.8, 3e6)]
+    res, _ = pressure_run(after, distribution_days=2)
+    (t,) = res.trades
+    assert t.exit_reason == "end_of_test"
