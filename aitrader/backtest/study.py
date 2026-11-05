@@ -192,6 +192,74 @@ def run_a3_study(deps: JobDeps, out_dir: Path, start: Optional[date] = None, end
     return {"a3": rows}
 
 
+# C3 improvements (ideas from the trader-* skills): (label, family, strategy overrides, money overrides)
+C3X_SINGLES = [
+    ("C3-confirm", "entry", {"entry_confirm": True}, {}),  # trader-entry: buy only on confirmation
+    ("C3-aplus", "filter", {"volume_surge": 3.0}, {}),  # trader-risk: only the strongest setups
+]
+
+
+def _bootstrap_line(label: str, run: dict) -> str:
+    from aitrader.backtest.analysis import bootstrap_years
+
+    trades = [t for t in run["trades"] if t["period"] == "earlier"]
+    years = max(1.0, (date.fromisoformat(run["summary"]["unseen_from"]) - run["start_date"]).days / 365.25)
+    per_year = max(1, round(len(trades) / years))
+    b = bootstrap_years([float(t["r_multiple"]) for t in trades], per_year)
+    if not b["runs"]:
+        return f"- {label}: no earlier trades to resample."
+    return (f"- {label} (earlier years resampled {b['runs']:,} times, {per_year} trades a year, seed {b['seed']}): a "
+            f"year's total {b['p5_r']:+.1f}R (bad, 5%) / {b['median_r']:+.1f}R (typical) / {b['p95_r']:+.1f}R "
+            f"(good, 95%); a losing year {b['losing_year_odds'] * 100:.0f}% of the time; worst losing streak in a "
+            f"year typically {b['median_worst_streak']}, 1 year in 20 {b['p95_worst_streak']} or more.")
+
+
+def run_c3x_study(deps: JobDeps, out_dir: Path, start: Optional[date] = None, end: Optional[date] = None,
+                  log: Callable[[str], None] = print, base_run: int = 55) -> Dict[str, List[Tuple[str, dict]]]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    engine = deps.engine
+    log("Scanning full history for price jumps first …")
+    scan = run_job("scan_history", deps, deps.now().date())
+    log(f"  scan_history: {scan.status} {scan.counts}")
+    with engine.connect() as conn:
+        base_money = resolve_money(conn, ("run", base_run, {}))
+        ref = repo.backtest_run_row(conn, base_run)
+    rows: List[Tuple[str, dict]] = []
+    base = _run_one(engine, "C3-base", "breakout_c3", base_money, start, end, out_dir, log)
+    rows.append(("C3-base", base))
+    singles, specs = [], {}
+    for label, family, strategy_params, money_changes in C3X_SINGLES:
+        run = _run_one(engine, label, "breakout_c3", replace(base_money, **money_changes), start, end, out_dir,
+                       log, strategy_params=strategy_params)
+        rows.append((label, run))
+        singles.append((label, family, run["summary"]))
+        specs[label] = (strategy_params, money_changes)
+    chosen, notes = select_a3_best(base["summary"], singles)
+    notes = [n.replace("A2-base", "C3-base").replace("A3-best", "C3-best") for n in notes]
+    params: dict = {}
+    money_changes: dict = {}
+    for label in chosen:
+        params.update(specs[label][0])
+        money_changes.update(specs[label][1])
+    best = _run_one(engine, "C3-best", "breakout_c3", replace(base_money, **money_changes), start, end, out_dir,
+                    log, strategy_params=params, notes=tuple(notes))
+    rows.append(("C3-best", best))
+    sections = [comparison_markdown(rows, "C3 improvements — base, single changes and C3-best"),
+                "# How C3-best was chosen (earlier-period numbers only)\n\n" + "\n".join(f"- {n}" for n in notes)
+                + "\n",
+                "# Time-machine view: what a normal year can look like\n\n"
+                + "\n".join(_bootstrap_line(label, run) for label, run in rows) + "\n\n*Built only from the "
+                "earlier years' trades, resampled at random. It shows the range of luck, not a forecast.*\n",
+                "# Reproduction check\n\n- " + reproduction_line("C3-base", base["summary"], base_run,
+                                                                  ref and ref["summary"]) + "\n"]
+    combined = "\n".join(sections)
+    (out_dir / "comparison.md").write_text(combined, encoding="utf-8")
+    log("")
+    for line in combined.splitlines():
+        log(line)
+    return {"c3x": rows}
+
+
 def top_earlier_symbols(run: dict, n: int = 5) -> List[str]:
     """The n stocks with the largest ₹ P&L in the run's EARLIER period (never the unseen one)."""
     by: Dict[str, float] = {}

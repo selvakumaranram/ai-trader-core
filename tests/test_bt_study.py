@@ -180,3 +180,11 @@ def test_a3_selection_says_tie_when_two_variants_are_equal():
     assert chosen == ["A3-notime"]
     assert any("same earlier net R" in n and "first listed" in n for n in notes)
     assert not any("has the better earlier net R" in n for n in notes)
+
+
+
+def test_c3x_study_specs():
+    labels = [s[0] for s in study.C3X_SINGLES]
+    assert labels == ["C3-confirm", "C3-aplus"]
+    spec = {s[0]: s for s in study.C3X_SINGLES}
+    assert spec["C3-confirm"][2] == {"entry_confirm": True} and spec["C3-aplus"][2] == {"volume_surge": 3.0}

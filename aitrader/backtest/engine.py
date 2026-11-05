@@ -184,7 +184,14 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
             if gap:
                 skips[gap] += 1
                 continue
-            fill = open_ * (1 + costs.slippage)
+            price = open_
+            if params.get("entry_confirm"):  # buy only once the price trades above the signal day's high
+                level = cand.facts.get("signal_high")
+                if level is None or float(today.at[cand.symbol, "high"]) <= level:
+                    skips["not_confirmed"] += 1
+                    continue
+                price = max(open_, level)
+            fill = price * (1 + costs.slippage)
             if trail and not (params["min_stop"] <= (fill - cand.stop) / fill <= params["max_stop"]):
                 skips["stop_distance"] += 1
                 continue
@@ -204,7 +211,7 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 skips["no_cash"] += 1  # a leftover-cash crumb would distort R and pay fixed charges for nothing
                 continue
             # estimated round-trip charges + slippage ÷ ₹ risked, at the actual entry and the final share count
-            charge_ratio = round_trip_estimate(costs, shares, fill, open_) / (shares * (fill - cand.stop))
+            charge_ratio = round_trip_estimate(costs, shares, fill, price) / (shares * (fill - cand.stop))
             if money.max_charge_to_risk is not None and charge_ratio > money.max_charge_to_risk:
                 skips["charges_too_high"] += 1
                 charge_ratios_skipped.append(charge_ratio)
@@ -217,7 +224,7 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                 cand, d, fill, shares, planned_target(fill, cand.stop, reward), charges, fill, stop=cand.stop,
                 sizing={"risk_amount": round(risk_amount, 2), "intended_shares": intended, "size_cut": cut,
                         "regime_on": regime_on(cand.signal_date), "charge_to_risk": round(charge_ratio, 5),
-                        "entry_open": open_, "signal_close": cand.signal_close,
+                        "entry_open": open_, "entry_level": price, "signal_close": cand.signal_close,
                         "atr_pct": signal_vol.get(cand.symbol),
                         "nifty_above_sma50": above50.get(cand.signal_date) if regime50 is not None else None,
                         "group": groups.get(cand.symbol), "sector": sectors.get(cand.symbol)})

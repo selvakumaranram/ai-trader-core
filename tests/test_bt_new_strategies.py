@@ -389,3 +389,49 @@ def test_a3_is_a2_with_the_a3_best_settings():
     assert MomentumA3.PARAMS["time_stop_days"] is None and MomentumA3.PARAMS["keep_top"] == 50
     assert {k: v for k, v in MomentumA3.PARAMS.items() if k not in ("time_stop_days", "keep_top")} == \
         {k: v for k, v in MomentumA2.PARAMS.items() if k not in ("time_stop_days", "keep_top")}
+
+
+
+# --- C3 improvements: confirmation entry, A+ volume filter -------------------------------------------------------
+
+class Confirming(WeeklyScripted):
+    exit_policy, signal_frequency = "atr_trail", "daily"
+    PARAMS = {"time_stop_days": 40, "trail_atr": 3.0, "entry_confirm": True}
+
+    def weekly_exits(self, day, eligible, today, held):
+        return {}
+
+
+def confirm_frames(next_bar):
+    df = add_indicators(frame([FLAT] * 20 + [(100, 102, 99, 101, 1e6), next_bar] + [FLAT] * 3))
+    return {"AAA": df}, list(df.index)
+
+
+def confirm_cand(days):
+    return Candidate("AAA", LONG, days[20].date(), 101.0, 96.0, 1.0, "t", {"signal_high": 102.0, "atr14": 2.0})
+
+
+def test_confirmation_entry_buys_only_when_the_next_day_trades_above_the_signal_high():
+    frames, days = confirm_frames((101, 101.8, 100, 101, 1e6))  # never above 102
+    s = Confirming({days[20]: [confirm_cand(days)]})
+    res = simulate(frames, days, s, MoneyRules(), COSTS)
+    assert res.trades == [] and res.skips == {"not_confirmed": 1}
+
+
+def test_confirmation_entry_fills_at_the_signal_high_or_the_open_if_higher():
+    frames, days = confirm_frames((101, 103, 100.5, 102.5, 1e6))
+    (t,) = simulate(frames, days, Confirming({days[20]: [confirm_cand(days)]}), MoneyRules(), COSTS).trades
+    assert t.entry_price == pytest.approx(102.0 * (1 + COSTS.slippage))
+    frames, days = confirm_frames((103, 104, 102.8, 103.5, 1e6))  # gaps above the signal high
+    (t,) = simulate(frames, days, Confirming({days[20]: [confirm_cand(days)]}), MoneyRules(), COSTS).trades
+    assert t.entry_price == pytest.approx(103.0 * (1 + COSTS.slippage))
+
+
+def test_breakout_records_the_signal_high_and_a_plus_raises_the_volume_bar():
+    from aitrader.backtest.strategies.breakout_c3 import BreakoutC3
+    (c,) = BreakoutC3().candidates(DAY, rows(AAA=brk_row()))
+    assert c.facts["signal_high"] == 106.0
+    a_plus = BreakoutC3()
+    a_plus.PARAMS = {**BreakoutC3.PARAMS, "volume_surge": 3.0}
+    assert a_plus.candidates(DAY, rows(AAA=brk_row(volume=2.9e6))) == []
+    assert len(a_plus.candidates(DAY, rows(AAA=brk_row(volume=3.1e6)))) == 1

@@ -169,3 +169,16 @@ def test_group_sector_quarter_and_big_winner_tables():
     assert big_winner_share(ts, 5.0) == pytest.approx(500 / 500)
     q = quarter_table(ts, "earlier")
     assert [(r["quarter"], r["trades"]) for r in q] == [("2025-Q1", 2)]
+
+
+
+def test_bootstrap_years_is_repeatable_and_sane():
+    from aitrader.backtest.analysis import bootstrap_years
+    rs = [2.0, -1.0, -1.0, 3.0, -1.0, 0.5, -1.0, 1.5]
+    a = bootstrap_years(rs, trades_per_year=40, runs=2000, seed=19)
+    b = bootstrap_years(rs, trades_per_year=40, runs=2000, seed=19)
+    assert a == b
+    assert a["p5_r"] < a["median_r"] < a["p95_r"]
+    assert 0 <= a["losing_year_odds"] <= 1 and a["median_worst_streak"] >= 1
+    assert a["median_r"] == pytest.approx(40 * sum(rs) / len(rs), rel=0.2)
+    assert bootstrap_years([], 10)["runs"] == 0

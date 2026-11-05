@@ -122,6 +122,37 @@ def top_stocks(trades: Sequence[dict], n: int = 10) -> dict:
             "top5_pnl": top5, "top5_share": top5 / total if total > 0 else None}
 
 
+def bootstrap_years(r_multiples: Sequence[float], trades_per_year: int, runs: int = 10_000,
+                    seed: int = 19) -> dict:
+    """Resample past trade results (in R) into many imaginary years of `trades_per_year` trades each: the spread
+    of a year's total R, the odds of a losing year, and the typical worst losing streak inside a year."""
+    import random
+
+    rs = [float(r) for r in r_multiples]
+    if not rs or trades_per_year < 1:
+        return {"runs": 0}
+    rng = random.Random(seed)
+    totals, streaks = [], []
+    for _ in range(runs):
+        year = [rng.choice(rs) for _ in range(trades_per_year)]
+        totals.append(sum(year))
+        worst = cur = 0
+        for r in year:
+            cur = cur + 1 if r <= 0 else 0
+            worst = max(worst, cur)
+        streaks.append(worst)
+    totals.sort()
+    streaks.sort()
+
+    def q(xs, p):
+        return xs[min(len(xs) - 1, int(p * len(xs)))]
+
+    return {"runs": runs, "seed": seed, "trades_per_year": trades_per_year, "p5_r": q(totals, 0.05),
+            "median_r": q(totals, 0.5), "p95_r": q(totals, 0.95),
+            "losing_year_odds": sum(1 for t in totals if t <= 0) / runs,
+            "median_worst_streak": q(streaks, 0.5), "p95_worst_streak": q(streaks, 0.95)}
+
+
 def by_label_table(trades: Sequence[dict], key: str) -> List[dict]:
     """Trades grouped by a recorded fact (e.g. "group", "sector"): trades, net R, ₹ P&L, share of the total P&L."""
     by: dict = {}

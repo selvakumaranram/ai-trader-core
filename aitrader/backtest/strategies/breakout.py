@@ -54,7 +54,7 @@ class Breakout:
             reason = (f"Closed at {r['close']:.2f}, {word} {level[symbol]:.2f}{vol}. "
                       f"Stop {stop[symbol]:.2f} (1×ATR beyond the breakout level).")
             facts = {"close": round(float(r["close"]), 4), "level": round(float(level[symbol]), 4),
-                     "atr14": round(float(atr[symbol]), 4)}
+                     "atr14": round(float(atr[symbol]), 4), "signal_high": round(float(r["high"]), 4)}
             if self.use_volume:
                 facts["volume_surge"] = round(float(surge[symbol]), 4)
             out.append(Candidate(str(symbol), direction, day.date(), float(r["close"]), float(stop[symbol]),
