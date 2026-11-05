@@ -435,3 +435,17 @@ def test_breakout_records_the_signal_high_and_a_plus_raises_the_volume_bar():
     a_plus.PARAMS = {**BreakoutC3.PARAMS, "volume_surge": 3.0}
     assert a_plus.candidates(DAY, rows(AAA=brk_row(volume=2.9e6))) == []
     assert len(a_plus.candidates(DAY, rows(AAA=brk_row(volume=3.1e6)))) == 1
+
+
+# --- C4: breakout + momentum ------------------------------------------------------------------------------------
+
+def test_c4_takes_a_breakout_only_when_the_stock_is_in_the_momentum_top_30():
+    from aitrader.backtest.strategies.breakout_momentum import BreakoutMomentum
+    data = {f"S{i:02d}": {**brk_row(volume=1e6), **a2_row(close=105.0, r6=i / 100, r12=i / 100, r6_voladj=float(i))}
+            for i in range(40)}
+    data["S39"] = {**data["S39"], "volume": 3e6}  # strongest momentum + a breakout
+    data["S00"] = {**data["S00"], "volume": 3e6}  # a breakout, but the weakest momentum
+    out = BreakoutMomentum().candidates(DAY, rows(**data))
+    assert [c.symbol for c in out] == ["S39"]
+    assert out[0].facts["momentum_rank"] == 1
+    assert STRATEGIES["breakout_momentum"] is BreakoutMomentum

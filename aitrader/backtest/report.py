@@ -14,7 +14,8 @@ NAMES = {"momentum": "A — Momentum", "pullback": "B — Trend pullback", "brea
          "breakout_c2": "C2 — Breakout, entry-checked, trailing exit",
          "pullback_b3": "B3 — Trend pullback, let winners run",
          "breakout_c3": "C3 — Breakout, trend-confirmed",
-         "momentum_a3": "A3 — Medium-term momentum (A3-best)"}
+         "momentum_a3": "A3 — Medium-term momentum (A3-best)",
+         "breakout_momentum": "C4 — Breakout + momentum"}
 
 RULES = {
     "pullback": """\
@@ -144,6 +145,12 @@ RULES["momentum_a3"] = RULES["momentum_a2"] + """
 **A3 changes (chosen in the A3 study using the earlier years only):** no time stop, and a holding is kept while it
 stays in the top 50 by score (A2 uses the top 30)."""
 
+RULES["breakout_momentum"] = RULES["breakout_c3"] + """
+
+**C4 = C3 + momentum:** a breakout is taken only when the stock is also in the **top 30** of A2's medium-term
+momentum ranking that day (6- and 12-month returns skipping the latest month, and the volatility-adjusted 6-month
+return; see strategy A2)."""
+
 SKIP_NOTES = {
     "regime_off": "NIFTY 50 closed at or below its 200-day average on the signal day (long entries only)",
     "charges_too_high": "estimated round-trip charges + slippage were more than the allowed share of the rupees "
@@ -155,7 +162,7 @@ SKIP_NOTES = {
     "short_regime_off": "NIFTY 50 was not above both its 50- and 200-day averages on the signal day",
 }
 
-TRAILING = {"momentum_a2", "breakout_c2", "pullback_b3", "breakout_c3", "momentum_a3"}  # no fixed target: trailing stop + time stop
+TRAILING = {"momentum_a2", "breakout_c2", "pullback_b3", "breakout_c3", "momentum_a3", "breakout_momentum"}  # no fixed target: trailing stop + time stop
 
 QUESTIONS = [
     "Compare profit before and after charges. What does the gap say about trade size, stop distance and the "
