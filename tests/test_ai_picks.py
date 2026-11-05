@@ -190,3 +190,9 @@ def test_gemini_client_does_not_hide_a_bad_request(monkeypatch):
     monkeypatch.setattr(A.urllib.request, "urlopen", fake)
     with pytest.raises(RuntimeError, match="HTTP 400"):
         A.GeminiClient("k", ["a", "b"]).ask("p")
+
+
+def test_signals_the_ai_did_not_mention_are_recorded_as_not_chosen():
+    out = A.parse_answer(json.dumps({"picks": [{"id": 1, "pick": True, "reason": "good"}]}), {1, 2, 3})
+    assert out[1] == (True, "good")
+    assert out[2] == (False, "not chosen by the AI") and out[3] == (False, "not chosen by the AI")

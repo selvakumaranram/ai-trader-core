@@ -62,7 +62,8 @@ def build_prompt(signals, stats: Dict[int, list], sectors: Dict[str, str]) -> st
 
 
 def parse_answer(text: str, ids: Set[int]) -> Dict[int, Tuple[bool, str]]:
-    """{signal id: (picked, reason)} in the AI's order; unknown ids dropped; picks beyond MAX_PICKS turned to skips."""
+    """{signal id: (picked, reason)} in the AI's order; unknown ids dropped; picks beyond MAX_PICKS turned to skips;
+    signals it did not mention recorded as not chosen."""
     try:
         data = json.loads(text)
         items = data["picks"]
@@ -83,6 +84,8 @@ def parse_answer(text: str, ids: Set[int]) -> Dict[int, Tuple[bool, str]]:
             pick, reason = False, f"{reason} (not picked: only {MAX_PICKS} slots)"
         picked += pick
         out[sid] = (pick, reason[:500])
+    for sid in sorted(ids - set(out)):  # the AI was asked about every signal; silence means it did not choose it
+        out[sid] = (False, "not chosen by the AI")
     return out
 
 
