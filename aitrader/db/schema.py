@@ -253,6 +253,7 @@ shadow_signals = Table(
     Column("note", Text),
     Column("user_view", String(10)),  # agree | disagree
     Column("user_view_at", DateTime(timezone=True)),
+    Column("pick_note", Text),  # your-picks portfolio: "bought" or why it was skipped
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("signal_date", "rule", "underlying", name="uq_shadow_signals_day_rule_symbol"),
 )
@@ -261,7 +262,8 @@ shadow_trades = Table(
     "shadow_trades",
     metadata,
     Column("id", Integer, primary_key=True),
-    Column("signal_id", Integer, ForeignKey("shadow_signals.id", ondelete="CASCADE"), nullable=False, unique=True),
+    Column("signal_id", Integer, ForeignKey("shadow_signals.id", ondelete="CASCADE"), nullable=False),
+    Column("portfolio", String(10), nullable=False, server_default=text("'rule'")),  # rule | mine (your picks)
     Column("rule", String(20), nullable=False),
     Column("side", String(4), nullable=False),  # CE | PE | BUY
     Column("tradingsymbol", String(60), nullable=False),
@@ -288,4 +290,5 @@ shadow_trades = Table(
     Column("initial_stop", PRICE),
     Column("highest_close", PRICE),
     Column("r_multiple", Numeric(12, 4)),
+    UniqueConstraint("signal_id", "portfolio", name="uq_shadow_trades_signal_portfolio"),
 )

@@ -132,10 +132,13 @@ def create_app(*, deps: JobDeps, sessions: Optional[SessionStore],
     @app.get("/local/shadow")
     def shadow_overview():
         from aitrader.shadow.live import scoreboard
+        from aitrader.shadow.stats import stats_for_signals
         with deps.engine.connect() as conn:
             signals = repo.shadow_signals_list(conn)
             trades = repo.shadow_trades_list(conn)
-        return {"signals": signals, "trades": trades, "scoreboard": scoreboard(signals, trades)}
+            source, per_signal = stats_for_signals(conn, signals)
+        return {"signals": signals, "trades": trades, "scoreboard": scoreboard(signals, trades),
+                "stats_source": source, "signal_stats": per_signal}
 
     @app.post("/local/shadow/signals/{signal_id}/view")
     def shadow_view(signal_id: int, body: ShadowViewBody):

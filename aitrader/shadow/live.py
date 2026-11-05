@@ -123,7 +123,9 @@ def shadow_enter(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
     with deps.engine.connect() as conn:
         all_signals = repo.new_shadow_signals(conn, signal_day) if signal_day else []
         contracts = [c for _, c in repo.live_option_contracts(conn, run_date) if c.underlying == "NIFTY"]
-        open_stocks = sum(1 for t in repo.open_shadow_trades(conn) if t["kind"] == "stock")
+        open_trades = [t for t in repo.open_shadow_trades(conn) if t["kind"] == "stock"]
+    open_stocks = sum(1 for t in open_trades if t["portfolio"] == "rule")
+    open_picks = sum(1 for t in open_trades if t["portfolio"] == "mine")
     signals = [s for s in all_signals if s["rule"] != STOCK_RULE]
     stock_signals = sorted((s for s in all_signals if s["rule"] == STOCK_RULE),
                            key=lambda s: -(s["facts"] or {}).get("score", 0))
@@ -132,8 +134,11 @@ def shadow_enter(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
     now = deps.now()
     late = f"late entry at {now:%H:%M}" if now.time() > LATE_AFTER else ""
     stocks_in, stocks_skipped = _enter_stocks(deps, kite, stock_signals, open_stocks, now, late)
+    agreed = [s for s in stock_signals if s["user_view"] == "agree"]
+    picks_in, picks_skipped = _enter_stocks(deps, kite, agreed, open_picks, now, late, portfolio="mine")
     if not signals:
-        return RunResult("ok", {"entered": stocks_in, "stocks_skipped": stocks_skipped})
+        return RunResult("ok", {"entered": stocks_in, "stocks_skipped": stocks_skipped, "picks_entered": picks_in,
+                                "picks_skipped": picks_skipped})
     spot = float(kite.quote([SPOT_KEY])[SPOT_KEY]["last_price"])
     entered, failed = stocks_in, 0
     for s in signals:
@@ -161,8 +166,10 @@ def shadow_enter(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
     return RunResult("ok" if not failed else "partial", {"entered": entered, "failed": failed})
 
 
-def _enter_stocks(deps: JobDeps, kite, signals, open_now: int, now, late: str):
-    """Pretend-buy C3 signals at the live price, sized like C3: 1% of a ₹1,00,000 account, ₹25,000 cap, 5 open."""
+def _enter_stocks(deps: JobDeps, kite, signals, open_now: int, now, late: str, portfolio: str = "rule"):
+    """Pretend-buy C3 signals at the live price, sized like C3: 1% of a ₹1,00,000 account, ₹25,000 cap, 5 open.
+    Each portfolio ("rule": every signal by score; "mine": only the signals you agreed with) has its own account
+    and its own 5 slots."""
     entered = skipped = 0
     costs = CostModel()
     for s in signals:
@@ -187,10 +194,14 @@ def _enter_stocks(deps: JobDeps, kite, signals, open_now: int, now, late: str):
                     reason = "charges too high vs risk"
         with deps.engine.begin() as conn:
             if reason:
-                repo.set_shadow_signal_status(conn, s["id"], "skipped", reason)
+                if portfolio == "rule":
+                    repo.set_shadow_signal_status(conn, s["id"], "skipped", reason)
+                else:
+                    repo.set_shadow_pick_note(conn, s["id"], f"skipped: {reason}")
                 skipped += 1
                 continue
             repo.insert_shadow_trade(conn, signal_id=s["id"], rule=STOCK_RULE, side="BUY", kind="stock",
+                                     portfolio=portfolio,
                                      tradingsymbol=s["underlying"], lot_size=shares, entry_at=now,
                                      entry_price=price, underlying_entry=price, stop=stop, initial_stop=stop,
                                      highest_close=price, target=0, note=late)
@@ -283,15 +294,22 @@ def _exit_stock(deps: JobDeps, t: dict, price: float, days_held: int, now, costs
 
 
 def scoreboard(signals, trades) -> dict:
-    """Per rule and per user view: closed trades, wins, win rate, total and average P&L per lot, open, missed."""
+    """Per rule, per user view and per stock portfolio: closed trades, wins, win rate, total and average P&L per lot, open, missed."""
     def stats(ts, sigs):
         done = [t for t in ts if t["status"] == "closed"]
         pnl = [float(t["pnl_per_lot"]) for t in done]
+        rs = [float(t["r_multiple"]) for t in done if t.get("r_multiple") is not None]
         wins = sum(1 for p in pnl if p > 0)
         return {"closed": len(done), "open": sum(1 for t in ts if t["status"] == "open"), "wins": wins,
                 "win_rate": wins / len(done) if done else None, "total_pnl": sum(pnl),
-                "avg_pnl": sum(pnl) / len(pnl) if pnl else None,
+                "avg_pnl": sum(pnl) / len(pnl) if pnl else None, "avg_r": sum(rs) / len(rs) if rs else None,
                 "missed": sum(1 for s in sigs if s["status"] == "missed"), "signals": len(sigs)}
+
+    picks = [t for t in trades if t.get("portfolio", "rule") == "mine"]
+    trades = [t for t in trades if t.get("portfolio", "rule") == "rule"]  # rule and view counts: the rule's trades
+    stock_sigs = [s for s in signals if s["rule"] == STOCK_RULE]
+    portfolios = {"rule": stats([t for t in trades if t["rule"] == STOCK_RULE], stock_sigs),
+                  "mine": stats(picks, [s for s in stock_sigs if s["user_view"] == "agree"])}
 
     rules = {r: stats([t for t in trades if t["rule"] == r], [s for s in signals if s["rule"] == r])
              for r in [*R.RULES, STOCK_RULE]}
@@ -300,4 +318,4 @@ def scoreboard(signals, trades) -> dict:
         sigs = [s for s in signals if s["user_view"] == view]
         ids = {s["id"] for s in sigs}
         views[view or "no_view"] = stats([t for t in trades if t["signal_id"] in ids], sigs)
-    return {"rules": rules, "views": views, "total": stats(trades, signals)}
+    return {"rules": rules, "views": views, "total": stats(trades, signals), "portfolios": portfolios}
