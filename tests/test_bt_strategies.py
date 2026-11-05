@@ -101,4 +101,5 @@ def test_empty_rows_and_registry():
     empty = pd.DataFrame()
     assert all(cls().candidates(DAY, empty) == [] for cls in STRATEGIES.values())
     assert set(STRATEGIES) == {"momentum", "pullback", "breakout", "price_action", "momentum_a2", "pullback_b2",
-                               "breakout_c2", "pullback_b3", "breakout_c3", "momentum_a3"}
+                               "breakout_c2", "pullback_b3", "breakout_c3", "momentum_a3",
+                               "breakout_momentum"}
