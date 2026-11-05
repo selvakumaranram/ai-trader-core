@@ -33,7 +33,8 @@ def build_runtime(settings: Settings):
         active = sessions.active() if sessions else None
         return gateway_factory(active.access_token) if active else None
 
-    key = settings.gemini_api_key.get_secret_value()
+    from aitrader.config import gemini_key
+    key = gemini_key(settings)
     ai = None
     if key:
         from aitrader.shadow.ai_picks import GeminiClient

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,3 +34,19 @@ class Settings(BaseSettings):
             and self.kite_api_secret.get_secret_value()
             and self.token_encryption_key.get_secret_value()
         )
+
+
+DASHBOARD_ENV = Path(__file__).resolve().parents[2] / "ai-trader" / ".env"
+
+
+def gemini_key(settings: Settings, fallback: Path = DASHBOARD_ENV) -> str:
+    """The core's own GEMINI_API_KEY, else that one line from the dashboard's .env (nothing else is read from it).
+    The value is never logged."""
+    own = settings.gemini_api_key.get_secret_value()
+    if own or not fallback.is_file():
+        return own
+    for line in fallback.read_text(encoding="utf-8-sig").splitlines():
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == "GEMINI_API_KEY":
+            return value.strip().strip('"').strip("'")
+    return ""
