@@ -287,6 +287,12 @@ _JOBS: Dict[str, Callable[..., RunResult]] = {
 }
 JOB_NAMES = tuple(_JOBS)
 
+from aitrader.shadow import live as _shadow  # noqa: E402  (after the core jobs: shadow.live imports from here)
+
+_JOBS.update({"shadow_scan": _shadow.shadow_scan, "shadow_enter": _shadow.shadow_enter,
+              "shadow_exit": _shadow.shadow_exit})
+JOB_NAMES = tuple(_JOBS)
+
 
 def run_job(name: str, deps: JobDeps, run_date: date, **kwargs) -> RunResult:
     if name not in _JOBS:

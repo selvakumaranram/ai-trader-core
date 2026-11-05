@@ -1,0 +1,11 @@
+# Business groups for the per-group position limit (max_per_group).
+# Today's group membership: a stock that joined a group later (e.g. Ambuja Cements, bought by Adani in 2022) is
+# counted in that group for the whole backtest. Only stocks in the local universe matter; extras are harmless.
+Adani: [ADANIENT, ADANIGREEN, ADANIPORTS, ADANIPOWER, ADANIENSOL, ATGL, AMBUJACEM, ACC]
+Tata: [TCS, TATASTEEL, TATAPOWER, TATACONSUM, TATACOMM, TATACAP, TATAMOTORS, TMCV, TMPV, TITAN, TRENT, INDHOTEL,
+       VOLTAS, TATAELXSI, TATACHEM, TATATECH]
+Bajaj: [BAJAJ-AUTO, BAJFINANCE, BAJAJFINSV, BAJAJHLDNG, BAJAJHFL]
+Reliance: [RELIANCE, JIOFIN]
+Aditya Birla: [GRASIM, ULTRACEMCO, HINDALCO, ABCAPITAL, ABFRL]
+PSU railways: [RVNL, IRFC, IRCON, RAILTEL]
+PSU power finance: [PFC, RECLTD]

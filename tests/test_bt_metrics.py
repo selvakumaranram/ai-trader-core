@@ -141,3 +141,30 @@ def test_summary_has_loss_streaks():
     pts = [EquityPoint(date(2024, 1, 2), 20000, 0, 20000), EquityPoint(date(2024, 3, 2), 20000, 0, 20000)]
     s = summarize(sim(pts, _seq_trades([-1, -1, 1])), [20000, 20000], MoneyRules(), date(2024, 1, 1))
     assert s["loss_streaks"]["whole"]["alerts"] == 1 and "unseen" in s["loss_streaks"]
+
+
+
+def test_drawdown_details_peak_trough_recovery_and_underwater():
+    from datetime import timedelta
+    from aitrader.backtest.metrics import drawdown_details
+    d = [date(2020, 1, 1) + timedelta(days=30 * k) for k in range(8)]
+    values = [100, 120, 90, 80, 100, 121, 110, 100]
+    pts = [EquityPoint(day, v, 0, v) for day, v in zip(d, values)]
+    dd = drawdown_details(pts, 100)
+    assert dd["peak_date"] == d[1].isoformat() and dd["trough_date"] == d[3].isoformat()
+    assert dd["recovery_date"] == d[5].isoformat() and dd["max_drawdown_pct"] == pytest.approx(1 / 3)
+    assert dd["longest_underwater_months"] == pytest.approx((d[5] - d[1]).days / 30.44, abs=0.01)
+    assert drawdown_details(pts[:5], 100)["recovery_date"] is None  # still below the 120 peak at the end
+
+
+def test_trade_stats_top5_share_of_profit():
+    from aitrader.backtest.metrics import trade_stats
+    from aitrader.backtest.types import Trade
+
+    def t(sym, pnl):
+        return Trade(sym, date(2025, 1, 1), date(2025, 1, 2), 100, 1, 90, 0, date(2025, 1, 3), 100, "time", 0,
+                     pnl, 0, "", {})
+    s = trade_stats([t("A", 500), t("A", 100), t("B", 200), t("C", 100), t("D", 50), t("E", 50), t("F", 30),
+                     t("G", -400)])
+    # top 5 symbols by ₹ P&L: A 600, B 200, C 100, D 50, E 50 = 1000 of the 630 total
+    assert s["top5_share"] == pytest.approx(1000 / 630)

@@ -35,8 +35,8 @@ def test_catch_up_today_runs_every_due_job_in_schedule_order(monkeypatch):
     ran = []
     _fake_runs(monkeypatch, ran=ran)
     deps = make_deps(datetime(2026, 10, 28, 17, 9, tzinfo=IST))  # woke at 17:09 after sleeping through 15:35
-    assert scheduler.catch_up_today(deps) == ["sync_instruments", "snapshot_options", "ingest_daily_bars",
-                                              "run_quality_checks"]
+    assert scheduler.catch_up_today(deps) == ["sync_instruments", "shadow_enter", "shadow_exit", "snapshot_options",
+                                              "ingest_daily_bars", "shadow_scan", "run_quality_checks"]
     assert ran == [(name, date(2026, 10, 28)) for name, _, _ in scheduler.SCHEDULE]
 
 
@@ -44,13 +44,14 @@ def test_catch_up_today_waits_for_each_jobs_time(monkeypatch):
     ran = []
     _fake_runs(monkeypatch, ran=ran)
     assert scheduler.catch_up_today(make_deps(datetime(2026, 10, 28, 16, 40, tzinfo=IST))) == [
-        "sync_instruments", "snapshot_options", "ingest_daily_bars"]
+        "sync_instruments", "shadow_enter", "shadow_exit", "snapshot_options", "ingest_daily_bars", "shadow_scan"]
 
 
 def test_catch_up_today_skips_jobs_already_run_since_their_time(monkeypatch):
     ran = []
     _fake_runs(monkeypatch, done={"sync_instruments": ["ok"], "snapshot_options": ["failed"],
-                                  "ingest_daily_bars": ["running"]}, ran=ran)
+                                  "ingest_daily_bars": ["running"], "shadow_enter": ["ok"], "shadow_exit": ["ok"],
+                                  "shadow_scan": ["ok"]}, ran=ran)
     assert scheduler.catch_up_today(make_deps(datetime(2026, 10, 28, 16, 50, tzinfo=IST))) == [
         "run_quality_checks"]
 
@@ -65,12 +66,14 @@ def test_catch_up_today_does_nothing_on_a_weekend(monkeypatch):
 def test_snapshot_skipped_for_no_login_is_retried_only_once_logged_in(monkeypatch):
     ran = []
     _fake_runs(monkeypatch, done={"sync_instruments": ["skipped"], "snapshot_options": ["skipped"],
+                                  "shadow_enter": ["skipped"], "shadow_exit": ["skipped"], "shadow_scan": ["ok"],
                                   "ingest_daily_bars": ["ok"], "run_quality_checks": ["ok"]}, ran=ran)
     now = datetime(2026, 10, 28, 17, 0, tzinfo=IST)
     assert scheduler.catch_up_today(make_deps(now)) == []  # still not logged in: no new row every minute
     logged_in = JobDeps(engine=None, kite=lambda: object(), bar_source=None, calendar=TradingCalendar(),
                         now=lambda: now)
-    assert scheduler.catch_up_today(logged_in) == ["sync_instruments", "snapshot_options"]
+    assert scheduler.catch_up_today(logged_in) == ["sync_instruments", "shadow_enter", "shadow_exit",
+                                                   "snapshot_options"]
 
 
 def test_scheduler_registers_one_minute_watchdog():

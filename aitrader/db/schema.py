@@ -234,3 +234,58 @@ backtest_index_signals = Table(
     Column("reason", Text, nullable=False),
     Column("period", String(10), nullable=False),
 )
+
+
+shadow_signals = Table(
+    "shadow_signals",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("signal_date", Date, nullable=False),
+    Column("rule", String(20), nullable=False),
+    Column("side", String(4), nullable=False),  # CE | PE | BUY
+    Column("underlying", String(20), nullable=False, server_default=text("'NIFTY'")),
+    Column("close", PRICE, nullable=False),
+    Column("stop", PRICE, nullable=False),
+    Column("target", PRICE),  # NULL for a stock signal (trailing stop, no target)
+    Column("reason", Text, nullable=False),
+    Column("facts", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    Column("status", String(10), nullable=False, server_default=text("'new'")),  # new | entered | missed | skipped
+    Column("note", Text),
+    Column("user_view", String(10)),  # agree | disagree
+    Column("user_view_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("signal_date", "rule", "underlying", name="uq_shadow_signals_day_rule_symbol"),
+)
+
+shadow_trades = Table(
+    "shadow_trades",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("signal_id", Integer, ForeignKey("shadow_signals.id", ondelete="CASCADE"), nullable=False, unique=True),
+    Column("rule", String(20), nullable=False),
+    Column("side", String(4), nullable=False),  # CE | PE | BUY
+    Column("tradingsymbol", String(60), nullable=False),
+    Column("kind", String(10), nullable=False, server_default=text("'option'")),  # option | stock
+    Column("expiry", Date),
+    Column("strike", Numeric(12, 2)),
+    Column("lot_size", Integer, nullable=False),  # option lot size, or the number of shares for a stock
+    Column("entry_at", DateTime(timezone=True), nullable=False),
+    Column("entry_price", PRICE, nullable=False),
+    Column("underlying_entry", PRICE, nullable=False),
+    Column("stop", PRICE, nullable=False),
+    Column("target", PRICE, nullable=False),
+    Column("mark_price", PRICE),
+    Column("underlying_mark", PRICE),
+    Column("marked_at", DateTime(timezone=True)),
+    Column("exit_at", DateTime(timezone=True)),
+    Column("exit_price", PRICE),
+    Column("underlying_exit", PRICE),
+    Column("exit_reason", String(20)),
+    Column("status", String(10), nullable=False, server_default=text("'open'")),  # open | closed
+    Column("charges", Numeric(12, 2)),
+    Column("pnl_per_lot", Numeric(14, 2)),
+    Column("note", Text),
+    Column("initial_stop", PRICE),
+    Column("highest_close", PRICE),
+    Column("r_multiple", Numeric(12, 4)),
+)

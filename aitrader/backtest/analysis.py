@@ -81,16 +81,136 @@ def entry_gap_table(trades: Sequence[dict]) -> List[dict]:
     return out
 
 
-def _regime(t: dict) -> str:
-    on = (t.get("facts") or {}).get("regime_on")
+VOL_BUCKETS = ((0.02, "<2%"), (0.03, "2–3%"), (0.04, "3–4%"), (0.06, "4–6%"), (float("inf"), ">6%"))
+
+
+def vol_bucket(atr_pct: float) -> str:
+    return next(label for upper, label in VOL_BUCKETS if atr_pct < upper)
+
+
+def _facts(t: dict) -> dict:
+    return t.get("facts") or {}
+
+
+def volatility_table(trades: Sequence[dict]) -> List[dict]:
+    """Trades by the stock's ATR(14) ÷ close on the signal day."""
+    def label(t):
+        v = _facts(t).get("atr_pct")
+        return "unknown" if v is None else vol_bucket(float(v))
+    out = []
+    for bucket in [b for _, b in VOL_BUCKETS] + ["unknown"]:
+        for period in PERIODS:
+            group = [t for t in trades if t["period"] == period and label(t) == bucket]
+            if group:
+                r = r_split(group)
+                out.append({"bucket": bucket, "period": period, "trades": len(group), "win_rate": _win_rate(group),
+                            "gross_r": r["gross_r"], "net_r": r["net_r"]})
+    return out
+
+
+def top_stocks(trades: Sequence[dict], n: int = 10) -> dict:
+    """The n most-traded stocks, and how much of the total ₹ P&L the five biggest contributors made."""
+    by: dict = {}
+    for t in trades:
+        by.setdefault(t["symbol"], []).append(t)
+    rows = [{"symbol": sym, "trades": len(g), "win_rate": _win_rate(g),
+             "net_r": _mean([_f(t, "r_multiple") for t in g]), "pnl": sum(_f(t, "pnl") for t in g)}
+            for sym, g in by.items()]
+    total = sum(r["pnl"] for r in rows)
+    top5 = sum(sorted((r["pnl"] for r in rows), reverse=True)[:5])
+    return {"rows": sorted(rows, key=lambda r: (-r["trades"], r["symbol"]))[:n], "total_pnl": total,
+            "top5_pnl": top5, "top5_share": top5 / total if total > 0 else None}
+
+
+def bootstrap_years(r_multiples: Sequence[float], trades_per_year: int, runs: int = 10_000,
+                    seed: int = 19) -> dict:
+    """Resample past trade results (in R) into many imaginary years of `trades_per_year` trades each: the spread
+    of a year's total R, the odds of a losing year, and the typical worst losing streak inside a year."""
+    import random
+
+    rs = [float(r) for r in r_multiples]
+    if not rs or trades_per_year < 1:
+        return {"runs": 0}
+    rng = random.Random(seed)
+    totals, streaks = [], []
+    for _ in range(runs):
+        year = [rng.choice(rs) for _ in range(trades_per_year)]
+        totals.append(sum(year))
+        worst = cur = 0
+        for r in year:
+            cur = cur + 1 if r <= 0 else 0
+            worst = max(worst, cur)
+        streaks.append(worst)
+    totals.sort()
+    streaks.sort()
+
+    def q(xs, p):
+        return xs[min(len(xs) - 1, int(p * len(xs)))]
+
+    return {"runs": runs, "seed": seed, "trades_per_year": trades_per_year, "p5_r": q(totals, 0.05),
+            "median_r": q(totals, 0.5), "p95_r": q(totals, 0.95),
+            "losing_year_odds": sum(1 for t in totals if t <= 0) / runs,
+            "median_worst_streak": q(streaks, 0.5), "p95_worst_streak": q(streaks, 0.95)}
+
+
+def by_label_table(trades: Sequence[dict], key: str) -> List[dict]:
+    """Trades grouped by a recorded fact (e.g. "group", "sector"): trades, net R, ₹ P&L, share of the total P&L."""
+    by: dict = {}
+    for t in trades:
+        by.setdefault(_facts(t).get(key) or "none", []).append(t)
+    total = sum(_f(t, "pnl") for t in trades)
+    rows = [{"label": label, "trades": len(g), "net_r": _mean([_f(t, "r_multiple") for t in g]),
+             "pnl": sum(_f(t, "pnl") for t in g)} for label, g in by.items()]
+    for r in rows:
+        r["share"] = r["pnl"] / total if total > 0 else None
+    return sorted(rows, key=lambda r: -r["pnl"])
+
+
+def big_winner_share(trades: Sequence[dict], threshold_r: float = 5.0) -> Optional[float]:
+    """Share of the total ₹ P&L made by trades above threshold_r (None when the total isn't positive)."""
+    total = sum(_f(t, "pnl") for t in trades)
+    big = sum(_f(t, "pnl") for t in trades if _f(t, "r_multiple") > threshold_r)
+    return big / total if total > 0 else None
+
+
+def quarter_table(trades: Sequence[dict], period: str) -> List[dict]:
+    """Trades of one period by the calendar quarter they closed in."""
+    by: dict = {}
+    for t in trades:
+        if t["period"] != period:
+            continue
+        year, month = str(t["exit_date"])[:4], int(str(t["exit_date"])[5:7])
+        by.setdefault(f"{year}-Q{(month - 1) // 3 + 1}", []).append(t)
+    return [{"quarter": q, "trades": len(g), "net_r": _mean([_f(t, "r_multiple") for t in g]),
+             "pnl": sum(_f(t, "pnl") for t in g)} for q, g in sorted(by.items())]
+
+
+def mfe_by_exit(trades: Sequence[dict]) -> List[dict]:
+    """Average max favourable excursion (best high while held, in R) and final R, by exit reason."""
+    out = []
+    for reason in sorted({t["exit_reason"] for t in trades}):
+        group = [t for t in trades if t["exit_reason"] == reason]
+        mfes = [float(_facts(t)["mfe_r"]) for t in group if _facts(t).get("mfe_r") is not None]
+        out.append({"exit_reason": reason, "trades": len(group), "with_mfe": len(mfes), "avg_mfe_r": _mean(mfes),
+                    "avg_r": _mean([_f(t, "r_multiple") for t in group])})
+    return sorted(out, key=lambda r: -r["trades"])
+
+
+def _regime(t: dict, key: str = "regime_on") -> str:
+    on = (t.get("facts") or {}).get(key)
     return "unknown" if on is None else ("above" if on else "below")
 
 
-def regime_table(trades: Sequence[dict]) -> List[dict]:
+def sma50_table(trades: Sequence[dict]) -> List[dict]:
+    """Trades by NIFTY 50 vs its 50-day average on the signal day."""
+    return regime_table(trades, "nifty_above_sma50")
+
+
+def regime_table(trades: Sequence[dict], key: str = "regime_on") -> List[dict]:
     out = []
     for period in PERIODS:
         for regime in ("above", "below", "unknown"):
-            group = [t for t in trades if t["period"] == period and _regime(t) == regime]
+            group = [t for t in trades if t["period"] == period and _regime(t, key) == regime]
             if group:
                 out.append({"period": period, "regime": regime, "trades": len(group), "win_rate": _win_rate(group),
                             "avg_r": _mean([_f(t, "r_multiple") for t in group]),
@@ -121,11 +241,12 @@ def _rupees(v) -> str:
 
 COLUMNS: Tuple[Tuple[str, str, object], ...] = (
     ("Return", "return_pct", _pct), ("CAGR", "cagr", _pct), ("Max drawdown", "max_drawdown_pct", _pct),
+    ("Longest underwater (months)", "longest_underwater_months", lambda v: "—" if v is None else f"{float(v):.1f}"),
     ("Worst month", "worst_month", _pct), ("Trades", "trades", lambda v: "—" if v is None else str(v)),
     ("% days invested", "pct_days_invested", _pct),
     ("Win rate", "win_rate", _pct), ("Net expectancy (R)", "expectancy_r", _num),
     ("Profit factor", "profit_factor", _num), ("Charges", "total_charges", _rupees),
-    ("Charges % of gross profit", "charges_pct_of_gross", _pct),
+    ("Charges % of gross profit", "charges_pct_of_gross", _pct), ("Top-5 share of profit", "top5_share", _pct),
 )
 
 

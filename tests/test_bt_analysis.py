@@ -96,3 +96,89 @@ def test_comparison_shows_days_invested():
     md = comparison_markdown([("C-base", {"summary": {**summary(0.1), "earlier": {**summary(0.1)["earlier"],
                                                                                   "pct_days_invested": 0.148}}})])
     assert "% days invested" in md and "14.8%" in md
+
+
+def vol_trade(atr_pct, symbol="AAA", period="earlier", pnl=40.0, mfe=None, exit_reason="stop"):
+    t = trade(period=period, pnl=pnl)
+    t.update(symbol=symbol, exit_reason=exit_reason)
+    t["facts"].update(atr_pct=atr_pct, mfe_r=mfe)
+    return t
+
+
+def test_volatility_table_buckets_atr_over_close_at_entry():
+    from aitrader.backtest.analysis import volatility_table, vol_bucket
+    assert [vol_bucket(v) for v in (0.019, 0.02, 0.035, 0.05, 0.061)] == ["<2%", "2–3%", "3–4%", "4–6%", ">6%"]
+    rows = volatility_table([vol_trade(0.07), vol_trade(0.07, period="unseen", pnl=-50), vol_trade(None)])
+    by = {(r["bucket"], r["period"]): r for r in rows}
+    assert by[(">6%", "earlier")]["trades"] == 1 and by[(">6%", "unseen")]["win_rate"] == 0.0
+    assert ("unknown", "earlier") in by
+
+
+def test_top_stocks_and_top_five_share():
+    from aitrader.backtest.analysis import top_stocks
+    ts = ([vol_trade(0.03, "PRESTIGE", pnl=100)] * 3 + [vol_trade(0.03, "IDEA", pnl=-40)] * 2
+          + [vol_trade(0.03, f"S{i}", pnl=10) for i in range(10)])
+    out = top_stocks(ts)
+    assert [r["symbol"] for r in out["rows"]][:2] == ["PRESTIGE", "IDEA"] and len(out["rows"]) == 10
+    assert out["rows"][0]["trades"] == 3 and out["rows"][0]["pnl"] == 300 and out["rows"][1]["win_rate"] == 0.0
+    total = 300 - 80 + 100
+    top5 = 300 + 10 + 10 + 10 + 10  # the five biggest contributors by ₹ P&L
+    assert out["top5_pnl"] == top5 and out["total_pnl"] == total and out["top5_share"] == pytest.approx(top5 / total)
+
+
+def test_mfe_by_exit_reason():
+    from aitrader.backtest.analysis import mfe_by_exit
+    rows = mfe_by_exit([vol_trade(0.03, mfe=2.0, exit_reason="time"), vol_trade(0.03, mfe=1.0, exit_reason="time"),
+                        vol_trade(0.03, mfe=0.2, exit_reason="stop"), vol_trade(0.03, exit_reason="stop")])
+    by = {r["exit_reason"]: r for r in rows}
+    assert by["time"]["avg_mfe_r"] == pytest.approx(1.5) and by["time"]["trades"] == 2
+    assert by["stop"]["avg_mfe_r"] == pytest.approx(0.2) and by["stop"]["with_mfe"] == 1
+
+
+
+def test_nifty_sma50_table():
+    from aitrader.backtest.analysis import sma50_table
+    ts = [trade(), trade(pnl=-50), trade(period="unseen")]
+    ts[0]["facts"]["nifty_above_sma50"] = True
+    ts[1]["facts"]["nifty_above_sma50"] = False
+    ts[2]["facts"]["nifty_above_sma50"] = False
+    by = {(r["period"], r["regime"]): r for r in sma50_table(ts)}
+    assert by[("earlier", "above")]["trades"] == 1 and by[("earlier", "below")]["pnl"] == -50
+    assert by[("unseen", "below")]["trades"] == 1
+
+
+def test_comparison_has_underwater_and_top5_columns():
+    s = summary(0.1)
+    s["earlier"].update(longest_underwater_months=26.3, top5_share=0.526)
+    md = comparison_markdown([("C3", {"summary": s})])
+    assert "Longest underwater (months)" in md and "26.3" in md and "Top-5 share of profit" in md and "52.6%" in md
+
+
+
+def test_group_sector_quarter_and_big_winner_tables():
+    from aitrader.backtest.analysis import big_winner_share, by_label_table, quarter_table
+    ts = [trade(pnl=500), trade(pnl=-100), trade(pnl=100, period="unseen")]
+    ts[0]["facts"]["group"], ts[1]["facts"]["group"] = "Adani", "Adani"
+    ts[0]["facts"]["sector"], ts[1]["facts"]["sector"], ts[2]["facts"]["sector"] = "Power", "Power", "IT"
+    ts[0]["r_multiple"] = 10.0
+    for t, d in zip(ts, ("2025-01-10", "2025-02-10", "2025-05-10")):
+        t["exit_date"] = d
+    groups = {r["label"]: r for r in by_label_table(ts, "group")}
+    assert groups["Adani"]["trades"] == 2 and groups["Adani"]["pnl"] == 400 and groups["Adani"]["share"] == pytest.approx(0.8)
+    assert groups["none"]["trades"] == 1
+    assert big_winner_share(ts, 5.0) == pytest.approx(500 / 500)
+    q = quarter_table(ts, "earlier")
+    assert [(r["quarter"], r["trades"]) for r in q] == [("2025-Q1", 2)]
+
+
+
+def test_bootstrap_years_is_repeatable_and_sane():
+    from aitrader.backtest.analysis import bootstrap_years
+    rs = [2.0, -1.0, -1.0, 3.0, -1.0, 0.5, -1.0, 1.5]
+    a = bootstrap_years(rs, trades_per_year=40, runs=2000, seed=19)
+    b = bootstrap_years(rs, trades_per_year=40, runs=2000, seed=19)
+    assert a == b
+    assert a["p5_r"] < a["median_r"] < a["p95_r"]
+    assert 0 <= a["losing_year_odds"] <= 1 and a["median_worst_streak"] >= 1
+    assert a["median_r"] == pytest.approx(40 * sum(rs) / len(rs), rel=0.2)
+    assert bootstrap_years([], 10)["runs"] == 0

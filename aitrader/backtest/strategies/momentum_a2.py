@@ -1,7 +1,7 @@
 """Strategy A2 — medium-term momentum: weekly ranking on 6- and 12-month returns that skip the latest month."""
 from __future__ import annotations
 
-from typing import List, Set
+from typing import Dict, List, Set
 
 import numpy as np
 import pandas as pd
@@ -19,7 +19,9 @@ class MomentumA2:
     signal_frequency = "weekly"
     PARAMS = {"weights": WEIGHTS, "skip_days": 21, "r6_days": 126, "r12_days": 252, "vol_days": 126,
               "min_bars": 260, "min_value50": 1e8, "top_n": 10, "keep_top": 30, "stop_atr": 2.5,
-              "trail_atr": 3.0, "time_stop_days": 60}
+              "trail_atr": 3.0, "time_stop_days": 60, "signal_weekday": None}
+    # keep_top None = no rank exit (only a close below the 200-day average exits on the weekly day);
+    # time_stop_days None = no time stop; signal_weekday None = last trading day of the week (2 = Wednesday)
 
     def prepare(self, df: pd.DataFrame) -> pd.DataFrame:
         p = self.PARAMS
@@ -60,6 +62,18 @@ class MomentumA2:
             facts["rank"] = pos
             out.append(Candidate(str(symbol), LONG, day.date(), float(r["close"]), float(stop), float(r["score"]),
                                  reason, facts))
+        return out
+
+    def weekly_exits(self, day: pd.Timestamp, eligible: pd.DataFrame, today: pd.DataFrame,
+                     held: Set[str]) -> Dict[str, str]:
+        """Held stocks to sell at the next open, with the reason."""
+        if self.PARAMS.get("keep_top"):
+            keep = self.rank_keep(day, eligible)
+            return {s: "rank_exit" for s in held if s not in keep}
+        out = {}
+        for s in held:
+            if s in today.index and float(today.at[s, "close"]) <= float(today.at[s, "sma200"]):
+                out[s] = "below_sma200"
         return out
 
     def rank_keep(self, day: pd.Timestamp, rows: pd.DataFrame) -> Set[str]:

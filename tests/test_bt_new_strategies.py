@@ -284,3 +284,154 @@ def test_index_tables_use_the_family_rules():
         s = index_strategy_for(key)
         assert type(s) is Breakout and s.use_volume is False
     assert type(index_strategy_for("pullback_b2")) is Pullback and type(index_strategy_for("pullback")) is Pullback
+
+
+# --- B3 ---------------------------------------------------------------------------------------------------------
+
+def test_b3_is_b2_entries_with_a_trailing_exit_forty_day_stop_and_cooldown():
+    from aitrader.backtest.strategies.pullback_b3 import PullbackB3
+    assert issubclass(PullbackB3, PullbackB2) and STRATEGIES["pullback_b3"] is PullbackB3
+    assert PullbackB3.exit_policy == "atr_trail" and PullbackB3.PARAMS["trail_atr"] == 3.0
+    assert PullbackB3.PARAMS["time_stop_days"] == 40 and PullbackB3.PARAMS["reentry_cooldown_days"] == 10
+    s = PullbackB3()
+    s.nifty_ret126 = {DAY.date(): 0.05}
+    (c,) = s.candidates(DAY, rows(AAA=b2_row(low3=100.5)))
+    assert c.stop == pytest.approx(101.0 - 1.5 * 2.0)  # B2's 1.5-ATR minimum stop kept
+
+
+def test_b3_has_no_target_exit():
+    from aitrader.backtest.strategies.pullback_b3 import PullbackB3
+    up = [FLAT] * 20 + [(100 + 2 * k, 101 + 2 * k, 99 + 2 * k, 100 + 2 * k, 1e6) for k in range(1, 20)]
+    df = prep(up)
+    days = list(df.index)
+
+    class One(PullbackB3):
+        def candidates(self, day, rows_):
+            return [Candidate("AAA", LONG, day.date(), 100.0, 97.0, 1.0, "t", {"atr14": 2.0})] \
+                if day == days[19] else []
+
+    (t,) = simulate({"AAA": df}, days, One(), MoneyRules(), COSTS).trades
+    assert t.exit_reason == "end_of_test" and t.target == float("inf") and t.r_multiple > 2  # ran past 2R
+
+
+
+# --- C3 ---------------------------------------------------------------------------------------------------------
+
+def test_c3_stop_is_never_closer_than_one_and_a_half_atr_below_the_signal_close():
+    from aitrader.backtest.strategies.breakout_c3 import BreakoutC3
+    (c,) = BreakoutC3().candidates(DAY, rows(AAA=brk_row(close=104.0, high=104.5, atr14=2.0)))  # level 103
+    assert c.stop == pytest.approx(min(103.0 - 2.0, 104.0 - 3.0))  # 101: the 1.5-ATR floor wins
+    (c,) = BreakoutC3().candidates(DAY, rows(AAA=brk_row(close=108.0, high=108.5, atr14=2.0)))
+    assert c.stop == pytest.approx(101.0)  # the breakout-level stop is already further away
+    for close in (103.5, 104.0, 106.0, 110.0):
+        (c,) = BreakoutC3().candidates(DAY, rows(AAA=brk_row(close=close, high=close + 0.5)))
+        assert close - c.stop >= 1.5 * 2.0 - 1e-9
+
+
+def test_c3_settings_and_registry():
+    from aitrader.backtest.strategies.breakout_c3 import BreakoutC3
+    from aitrader.backtest.strategies.breakout_c2 import BreakoutC2
+    assert issubclass(BreakoutC3, BreakoutC2) and STRATEGIES["breakout_c3"] is BreakoutC3
+    p = BreakoutC3.PARAMS
+    assert (p["stop_floor_atr"], p["regime_filter_short"], p["reentry_cooldown_days"], p["time_stop_days"],
+            p["trail_atr"], p["max_stop"]) == (1.5, True, 10, 40, 3.0, None)
+    from aitrader.backtest.runner import index_strategy_for
+    from aitrader.backtest.strategies.breakout import Breakout
+    assert type(index_strategy_for("breakout_c3")) is Breakout
+
+
+
+# --- A3 options: time stop off, rank exit off, weekly signal weekday ------------------------------------------
+
+def test_time_stop_off_never_produces_a_time_exit():
+    frames, days = a2_frames([FLAT] * 90)
+    s = WeeklyScripted({days[4]: [cand(days[4])]})
+    s.PARAMS = {**s.PARAMS, "time_stop_days": None}
+    (t,) = simulate(frames, days, s, MoneyRules(), COSTS).trades
+    assert t.exit_reason == "end_of_test"
+
+
+def test_a2_rank_off_exits_only_below_the_200_day_average():
+    a2 = MomentumA2()
+    a2.PARAMS = {**MomentumA2.PARAMS, "keep_top": None}
+    today = rows(AAA=a2_row(close=85.0), BBB=a2_row(r6=-0.5, r12=-0.5, r6_voladj=-9.0), CCC=a2_row())
+    eligible = today.loc[["BBB", "CCC"]]
+    assert a2.weekly_exits(DAY, eligible, today, {"AAA", "BBB"}) == {"AAA": "below_sma200"}
+    base = MomentumA2()  # keep_top 30: the same holdings go out as rank exits when not in the kept set
+    assert base.weekly_exits(DAY, eligible, today, {"AAA"}) == {"AAA": "rank_exit"}
+
+
+def test_weekly_exit_reason_reaches_the_trade_and_rank_off_never_says_rank_exit():
+    frames, days = a2_frames([FLAT] * 15)
+
+    class BelowAverage(WeeklyScripted):
+        def weekly_exits(self, day, eligible, today, held):
+            return {"AAA": "below_sma200"} if day == days[9] else {}
+
+    s = BelowAverage({days[4]: [cand(days[4])]})
+    (t,) = simulate(frames, days, s, MoneyRules(), COSTS).trades
+    assert t.exit_reason == "below_sma200" and t.exit_date == days[10].date()
+
+
+def test_wednesday_signal_days_fall_back_to_the_last_trading_day_before_it():
+    from aitrader.backtest.rules import week_signal_days
+    days = [pd.Timestamp(d) for d in ("2025-11-03", "2025-11-04", "2025-11-05", "2025-11-06", "2025-11-07",  # normal
+                                      "2025-11-10", "2025-11-11", "2025-11-13", "2025-11-14",  # Wed 12 holiday
+                                      "2025-11-20", "2025-11-21")]  # Mon–Wed holidays: no Wednesday-or-before
+    assert week_signal_days(days, 2) == {pd.Timestamp("2025-11-05"), pd.Timestamp("2025-11-11")}
+    assert week_signal_days(days, None) == {pd.Timestamp("2025-11-07"), pd.Timestamp("2025-11-14"),
+                                            pd.Timestamp("2025-11-21")}
+
+
+def test_a3_is_a2_with_the_a3_best_settings():
+    from aitrader.backtest.strategies.momentum_a3 import MomentumA3
+    assert issubclass(MomentumA3, MomentumA2) and STRATEGIES["momentum_a3"] is MomentumA3
+    assert MomentumA3.PARAMS["time_stop_days"] is None and MomentumA3.PARAMS["keep_top"] == 50
+    assert {k: v for k, v in MomentumA3.PARAMS.items() if k not in ("time_stop_days", "keep_top")} == \
+        {k: v for k, v in MomentumA2.PARAMS.items() if k not in ("time_stop_days", "keep_top")}
+
+
+
+# --- C3 improvements: confirmation entry, A+ volume filter -------------------------------------------------------
+
+class Confirming(WeeklyScripted):
+    exit_policy, signal_frequency = "atr_trail", "daily"
+    PARAMS = {"time_stop_days": 40, "trail_atr": 3.0, "entry_confirm": True}
+
+    def weekly_exits(self, day, eligible, today, held):
+        return {}
+
+
+def confirm_frames(next_bar):
+    df = add_indicators(frame([FLAT] * 20 + [(100, 102, 99, 101, 1e6), next_bar] + [FLAT] * 3))
+    return {"AAA": df}, list(df.index)
+
+
+def confirm_cand(days):
+    return Candidate("AAA", LONG, days[20].date(), 101.0, 96.0, 1.0, "t", {"signal_high": 102.0, "atr14": 2.0})
+
+
+def test_confirmation_entry_buys_only_when_the_next_day_trades_above_the_signal_high():
+    frames, days = confirm_frames((101, 101.8, 100, 101, 1e6))  # never above 102
+    s = Confirming({days[20]: [confirm_cand(days)]})
+    res = simulate(frames, days, s, MoneyRules(), COSTS)
+    assert res.trades == [] and res.skips == {"not_confirmed": 1}
+
+
+def test_confirmation_entry_fills_at_the_signal_high_or_the_open_if_higher():
+    frames, days = confirm_frames((101, 103, 100.5, 102.5, 1e6))
+    (t,) = simulate(frames, days, Confirming({days[20]: [confirm_cand(days)]}), MoneyRules(), COSTS).trades
+    assert t.entry_price == pytest.approx(102.0 * (1 + COSTS.slippage))
+    frames, days = confirm_frames((103, 104, 102.8, 103.5, 1e6))  # gaps above the signal high
+    (t,) = simulate(frames, days, Confirming({days[20]: [confirm_cand(days)]}), MoneyRules(), COSTS).trades
+    assert t.entry_price == pytest.approx(103.0 * (1 + COSTS.slippage))
+
+
+def test_breakout_records_the_signal_high_and_a_plus_raises_the_volume_bar():
+    from aitrader.backtest.strategies.breakout_c3 import BreakoutC3
+    (c,) = BreakoutC3().candidates(DAY, rows(AAA=brk_row()))
+    assert c.facts["signal_high"] == 106.0
+    a_plus = BreakoutC3()
+    a_plus.PARAMS = {**BreakoutC3.PARAMS, "volume_surge": 3.0}
+    assert a_plus.candidates(DAY, rows(AAA=brk_row(volume=2.9e6))) == []
+    assert len(a_plus.candidates(DAY, rows(AAA=brk_row(volume=3.1e6)))) == 1

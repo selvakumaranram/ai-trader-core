@@ -8,6 +8,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
 from aitrader.db.schema import (
+    shadow_signals,
+    shadow_trades,
     backtest_equity,
     backtest_index_signals,
     backtest_runs,
@@ -429,3 +431,66 @@ def run_statuses_since(conn: Connection, job: str, run_date: date, since: dateti
 
 def latest_bar_ingested_at(conn: Connection, source: str):
     return conn.execute(select(func.max(daily_bars.c.ingested_at)).where(daily_bars.c.source == source)).scalar()
+
+
+# --- shadow trading ------------------------------------------------------------------------------------------
+
+def insert_shadow_signal(conn: Connection, *, signal_date: date, rule: str, side: str, close: float, stop: float,
+                         target: Optional[float], reason: str, facts: dict, underlying: str = "NIFTY"
+                         ) -> Optional[int]:
+    """The new signal's id, or None when this rule already has a signal for that day and symbol."""
+    stmt = (pg_insert(shadow_signals)
+            .values(signal_date=signal_date, rule=rule, side=side, close=close, stop=stop, target=target,
+                    reason=reason, facts=facts, underlying=underlying)
+            .on_conflict_do_nothing(index_elements=["signal_date", "rule", "underlying"])
+            .returning(shadow_signals.c.id))
+    return conn.execute(stmt).scalar()
+
+
+def shadow_signals_list(conn: Connection, limit: int = 500) -> List[dict]:
+    rows = conn.execute(select(shadow_signals).order_by(shadow_signals.c.signal_date.desc(),
+                                                        shadow_signals.c.id.desc()).limit(limit)).mappings()
+    return [dict(r) for r in rows]
+
+
+def new_shadow_signals(conn: Connection, signal_date: date) -> List[dict]:
+    rows = conn.execute(select(shadow_signals).where(shadow_signals.c.signal_date == signal_date,
+                                                     shadow_signals.c.status == "new")
+                        .order_by(shadow_signals.c.id)).mappings()
+    return [dict(r) for r in rows]
+
+
+def mark_missed_shadow_signals(conn: Connection, *, before: date) -> int:
+    return conn.execute(update(shadow_signals).where(shadow_signals.c.status == "new",
+                                                     shadow_signals.c.signal_date < before)
+                        .values(status="missed")).rowcount
+
+
+def set_shadow_signal_status(conn: Connection, signal_id: int, status: str, note: str = "") -> None:
+    conn.execute(update(shadow_signals).where(shadow_signals.c.id == signal_id).values(status=status, note=note))
+
+
+def set_shadow_view(conn: Connection, signal_id: int, view: Optional[str]) -> bool:
+    return conn.execute(update(shadow_signals).where(shadow_signals.c.id == signal_id)
+                        .values(user_view=view, user_view_at=func.now() if view else None)).rowcount > 0
+
+
+def insert_shadow_trade(conn: Connection, **values) -> int:
+    trade_id = conn.execute(shadow_trades.insert().values(**values).returning(shadow_trades.c.id)).scalar_one()
+    conn.execute(update(shadow_signals).where(shadow_signals.c.id == values["signal_id"]).values(status="entered"))
+    return trade_id
+
+
+def open_shadow_trades(conn: Connection) -> List[dict]:
+    rows = conn.execute(select(shadow_trades).where(shadow_trades.c.status == "open")
+                        .order_by(shadow_trades.c.id)).mappings()
+    return [dict(r) for r in rows]
+
+
+def update_shadow_trade(conn: Connection, trade_id: int, **values) -> None:
+    conn.execute(update(shadow_trades).where(shadow_trades.c.id == trade_id).values(**values))
+
+
+def shadow_trades_list(conn: Connection) -> List[dict]:
+    rows = conn.execute(select(shadow_trades).order_by(shadow_trades.c.entry_at.desc())).mappings()
+    return [dict(r) for r in rows]

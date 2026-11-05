@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 import time
 from datetime import date
-from typing import Callable, Dict, Optional
+from typing import Literal, Callable, Dict, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse, Response
@@ -23,6 +23,10 @@ STATE_TTL_SECONDS = 600
 NOT_CONFIGURED = "Kite is not configured: set KITE_API_KEY, KITE_API_SECRET and TOKEN_ENCRYPTION_KEY in .env"
 
 _DEFAULT_MONEY = NEW_RUN_MONEY
+
+
+class ShadowViewBody(BaseModel):
+    view: Optional[Literal["agree", "disagree"]] = None
 
 
 class BacktestBody(BaseModel):
@@ -124,6 +128,37 @@ def create_app(*, deps: JobDeps, sessions: Optional[SessionStore],
             raise HTTPException(409, str(exc)) from None
         background.add_task(execute_run, deps.engine, run_id)
         return {"id": run_id}
+
+    @app.get("/local/shadow")
+    def shadow_overview():
+        from aitrader.shadow.live import scoreboard
+        with deps.engine.connect() as conn:
+            signals = repo.shadow_signals_list(conn)
+            trades = repo.shadow_trades_list(conn)
+        return {"signals": signals, "trades": trades, "scoreboard": scoreboard(signals, trades)}
+
+    @app.post("/local/shadow/signals/{signal_id}/view")
+    def shadow_view(signal_id: int, body: ShadowViewBody):
+        with deps.engine.begin() as conn:
+            if not repo.set_shadow_view(conn, signal_id, body.view):
+                raise HTTPException(404, f"No shadow signal #{signal_id}")
+        return {"id": signal_id, "view": body.view}
+
+    @app.get("/local/shadow/replay")
+    def shadow_replay():
+        from aitrader.backtest.bars import frame_from_bars
+        from aitrader.backtest.indicators import add_indicators
+        from aitrader.shadow.rules import replay
+        with deps.engine.connect() as conn:
+            inst = repo.instrument_by_symbol(conn, "NIFTY 50")
+            bars = repo.load_bars(conn, inst["id"], source="yfinance") if inst else []
+        if len(bars) < 300:
+            raise HTTPException(409, "Load NIFTY 50 history first (Data tab)")
+        df = add_indicators(frame_from_bars(bars))
+        last = df.index[-1].date()
+        unseen_from = last.replace(year=last.year - 2)
+        return {"from": df.index[200].date(), "to": last, "unseen_from": unseen_from,
+                "rules": replay(df.iloc[200:], unseen_from)}
 
     @app.get("/local/backtests")
     def list_backtests(limit: int = Query(20, ge=1, le=200)):

@@ -188,3 +188,23 @@ def test_report_shows_checklist_na_charge_spread_and_entry_gaps(engine):
                  "no stop-distance cap at the signal", "Trailing stop (× ATR14 below highest close) | 3.0 |"):
         assert text in md, text
     assert "Rank exit" not in md and "| Target (× risk) |" not in md
+
+
+def test_b3_report_and_mfe_column(engine):
+    run = strategy_run(engine, "pullback_b3")
+    assert run["status"] == "ok", run["message"]
+    run["summary"]["skips"] = {"cooldown_after_stop": 3}
+    md = report_markdown(run)
+    for text in ("B3 — Trend pullback, let winners run", "| Re-entry cooldown after a stop | 10 trading days |",
+                 "| Time stop (trading days) | 40 |", "No fixed target", "### Max favourable excursion by exit",
+                 "### By stock volatility at entry", "### Most-traded stocks",
+                 "cooldown after stop = ", "not for trading, research only" if run["summary"].get("index_signals")
+                 else "B3"):
+        assert text in md, text
+    header = trades_csv(run).splitlines()[0].split(",")
+    assert "mfe_r" in header and "atr_pct" in header
+
+
+def test_cooldown_shows_off_for_other_strategies(engine):
+    md = report_markdown(strategy_run(engine, "breakout"))
+    assert "| Re-entry cooldown after a stop | Off |" in md
