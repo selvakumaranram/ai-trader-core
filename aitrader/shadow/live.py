@@ -126,6 +126,7 @@ def shadow_enter(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
         open_trades = [t for t in repo.open_shadow_trades(conn) if t["kind"] == "stock"]
     open_stocks = sum(1 for t in open_trades if t["portfolio"] == "rule")
     open_picks = sum(1 for t in open_trades if t["portfolio"] == "mine")
+    open_ai = sum(1 for t in open_trades if t["portfolio"] == "ai")
     signals = [s for s in all_signals if s["rule"] != STOCK_RULE]
     stock_signals = sorted((s for s in all_signals if s["rule"] == STOCK_RULE),
                            key=lambda s: -(s["facts"] or {}).get("score", 0))
@@ -136,6 +137,9 @@ def shadow_enter(deps: JobDeps, run_date: date, run_id: int) -> RunResult:
     stocks_in, stocks_skipped = _enter_stocks(deps, kite, stock_signals, open_stocks, now, late)
     agreed = [s for s in stock_signals if s["user_view"] == "agree"]
     picks_in, picks_skipped = _enter_stocks(deps, kite, agreed, open_picks, now, late, portfolio="mine")
+    ai_chosen = [s for s in stock_signals if s.get("ai_view") == "pick"]
+    ai_in, _ = _enter_stocks(deps, kite, ai_chosen, open_ai, now, late, portfolio="ai")
+    picks_in += ai_in
     if not signals:
         return RunResult("ok", {"entered": stocks_in, "stocks_skipped": stocks_skipped, "picks_entered": picks_in,
                                 "picks_skipped": picks_skipped})
@@ -197,7 +201,7 @@ def _enter_stocks(deps: JobDeps, kite, signals, open_now: int, now, late: str, p
                 if portfolio == "rule":
                     repo.set_shadow_signal_status(conn, s["id"], "skipped", reason)
                 else:
-                    repo.set_shadow_pick_note(conn, s["id"], f"skipped: {reason}")
+                    repo.set_shadow_pick_note(conn, s["id"], f"skipped: {reason}", portfolio)
                 skipped += 1
                 continue
             repo.insert_shadow_trade(conn, signal_id=s["id"], rule=STOCK_RULE, side="BUY", kind="stock",
@@ -306,10 +310,12 @@ def scoreboard(signals, trades) -> dict:
                 "missed": sum(1 for s in sigs if s["status"] == "missed"), "signals": len(sigs)}
 
     picks = [t for t in trades if t.get("portfolio", "rule") == "mine"]
+    ai = [t for t in trades if t.get("portfolio", "rule") == "ai"]
     trades = [t for t in trades if t.get("portfolio", "rule") == "rule"]  # rule and view counts: the rule's trades
     stock_sigs = [s for s in signals if s["rule"] == STOCK_RULE]
     portfolios = {"rule": stats([t for t in trades if t["rule"] == STOCK_RULE], stock_sigs),
-                  "mine": stats(picks, [s for s in stock_sigs if s["user_view"] == "agree"])}
+                  "mine": stats(picks, [s for s in stock_sigs if s["user_view"] == "agree"]),
+                  "ai": stats(ai, [s for s in stock_sigs if s.get("ai_view") == "pick"])}
 
     rules = {r: stats([t for t in trades if t["rule"] == r], [s for s in signals if s["rule"] == r])
              for r in [*R.RULES, STOCK_RULE]}

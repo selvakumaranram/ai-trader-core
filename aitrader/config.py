@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     kite_api_secret: SecretStr = SecretStr("")
     token_encryption_key: SecretStr = SecretStr("")
     dashboard_url: str = "http://localhost:5173"
+    gemini_api_key: SecretStr = SecretStr("")  # AI picks (pretend portfolio only)
+    ai_model: str = "gemini-2.5-flash"
 
     @field_validator("host")
     @classmethod

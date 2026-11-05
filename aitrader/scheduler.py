@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 TIMEZONE = "Asia/Kolkata"
 SCHEDULE = (("sync_instruments", 8, 30), ("shadow_enter", 9, 20), ("shadow_exit", 15, 25),
             ("snapshot_options", 15, 35), ("ingest_daily_bars", 16, 30), ("shadow_scan", 16, 40),
-            ("run_quality_checks", 16, 45))
+            ("run_quality_checks", 16, 45), ("ai_picks", 17, 0))
 NEEDS_LOGIN = {"sync_instruments", "snapshot_options", "shadow_enter", "shadow_exit"}
 CATCH_UP_MAX_DAYS = 30
 DAILY_DATA_FINAL_AT = time(16, 30)

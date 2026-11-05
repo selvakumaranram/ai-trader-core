@@ -47,6 +47,7 @@ class JobDeps:
     bar_source: DailyBarSource
     calendar: TradingCalendar
     now: Callable[[], datetime] = field(default=lambda: datetime.now(IST))
+    ai: Optional[object] = None  # AI picks client: .model and .ask(prompt) -> str (None: no key set)
     on_auth_error: Callable[[], None] = field(default=lambda: None)
 
 
@@ -291,6 +292,9 @@ from aitrader.shadow import live as _shadow  # noqa: E402  (after the core jobs:
 
 _JOBS.update({"shadow_scan": _shadow.shadow_scan, "shadow_enter": _shadow.shadow_enter,
               "shadow_exit": _shadow.shadow_exit})
+from aitrader.shadow.ai_picks import ai_picks as _ai_picks  # noqa: E402
+
+_JOBS["ai_picks"] = _ai_picks
 JOB_NAMES = tuple(_JOBS)
 
 
