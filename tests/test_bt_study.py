@@ -179,4 +179,4 @@ def test_a3_selection_says_tie_when_two_variants_are_equal():
     chosen, notes = study.select_a3_best(base, singles)
     assert chosen == ["A3-notime"]
     assert any("same earlier net R" in n and "first listed" in n for n in notes)
-    assert not any("better earlier net R" in n for n in notes)
+    assert not any("has the better earlier net R" in n for n in notes)
