@@ -40,6 +40,8 @@ class MoneyRules:
     reentry_cooldown_days: Optional[int] = None  # None = the strategy's default (B3: 10); 0 = off
     regime_filter_short: Optional[bool] = None  # also need NIFTY 50 above its 50-day avg; None = strategy default
     dd_risk_scaling: bool = False  # half risk while equity is >10% below its all-time peak (back within 5%)
+    max_per_group: Optional[int] = None  # at most this many open positions in one business group
+    max_per_sector: Optional[int] = None  # at most this many open positions in one NSE industry
 
 
 NEW_RUN_MONEY = MoneyRules(capital=100_000.0, risk_per_trade=1_000.0, daily_loss_limit=3_000.0, max_positions=5,

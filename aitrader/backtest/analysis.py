@@ -122,6 +122,38 @@ def top_stocks(trades: Sequence[dict], n: int = 10) -> dict:
             "top5_pnl": top5, "top5_share": top5 / total if total > 0 else None}
 
 
+def by_label_table(trades: Sequence[dict], key: str) -> List[dict]:
+    """Trades grouped by a recorded fact (e.g. "group", "sector"): trades, net R, ₹ P&L, share of the total P&L."""
+    by: dict = {}
+    for t in trades:
+        by.setdefault(_facts(t).get(key) or "none", []).append(t)
+    total = sum(_f(t, "pnl") for t in trades)
+    rows = [{"label": label, "trades": len(g), "net_r": _mean([_f(t, "r_multiple") for t in g]),
+             "pnl": sum(_f(t, "pnl") for t in g)} for label, g in by.items()]
+    for r in rows:
+        r["share"] = r["pnl"] / total if total > 0 else None
+    return sorted(rows, key=lambda r: -r["pnl"])
+
+
+def big_winner_share(trades: Sequence[dict], threshold_r: float = 5.0) -> Optional[float]:
+    """Share of the total ₹ P&L made by trades above threshold_r (None when the total isn't positive)."""
+    total = sum(_f(t, "pnl") for t in trades)
+    big = sum(_f(t, "pnl") for t in trades if _f(t, "r_multiple") > threshold_r)
+    return big / total if total > 0 else None
+
+
+def quarter_table(trades: Sequence[dict], period: str) -> List[dict]:
+    """Trades of one period by the calendar quarter they closed in."""
+    by: dict = {}
+    for t in trades:
+        if t["period"] != period:
+            continue
+        year, month = str(t["exit_date"])[:4], int(str(t["exit_date"])[5:7])
+        by.setdefault(f"{year}-Q{(month - 1) // 3 + 1}", []).append(t)
+    return [{"quarter": q, "trades": len(g), "net_r": _mean([_f(t, "r_multiple") for t in g]),
+             "pnl": sum(_f(t, "pnl") for t in g)} for q, g in sorted(by.items())]
+
+
 def mfe_by_exit(trades: Sequence[dict]) -> List[dict]:
     """Average max favourable excursion (best high while held, in R) and final R, by exit reason."""
     out = []

@@ -152,3 +152,20 @@ def test_comparison_has_underwater_and_top5_columns():
     s["earlier"].update(longest_underwater_months=26.3, top5_share=0.526)
     md = comparison_markdown([("C3", {"summary": s})])
     assert "Longest underwater (months)" in md and "26.3" in md and "Top-5 share of profit" in md and "52.6%" in md
+
+
+
+def test_group_sector_quarter_and_big_winner_tables():
+    from aitrader.backtest.analysis import big_winner_share, by_label_table, quarter_table
+    ts = [trade(pnl=500), trade(pnl=-100), trade(pnl=100, period="unseen")]
+    ts[0]["facts"]["group"], ts[1]["facts"]["group"] = "Adani", "Adani"
+    ts[0]["facts"]["sector"], ts[1]["facts"]["sector"], ts[2]["facts"]["sector"] = "Power", "Power", "IT"
+    ts[0]["r_multiple"] = 10.0
+    for t, d in zip(ts, ("2025-01-10", "2025-02-10", "2025-05-10")):
+        t["exit_date"] = d
+    groups = {r["label"]: r for r in by_label_table(ts, "group")}
+    assert groups["Adani"]["trades"] == 2 and groups["Adani"]["pnl"] == 400 and groups["Adani"]["share"] == pytest.approx(0.8)
+    assert groups["none"]["trades"] == 1
+    assert big_winner_share(ts, 5.0) == pytest.approx(500 / 500)
+    q = quarter_table(ts, "earlier")
+    assert [(r["quarter"], r["trades"]) for r in q] == [("2025-Q1", 2)]

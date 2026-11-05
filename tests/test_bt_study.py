@@ -126,3 +126,48 @@ def test_runner_excludes_symbols(engine):
     with engine.connect() as conn:
         run = repo.get_backtest_run(conn, run_id)
     assert run["status"] == "ok" and run["trades"] == [] and run["params"]["exclude_symbols"] == ["BRK"]
+
+
+
+def _summary(net_earlier, dd_earlier, net_unseen=0.0, dd_unseen=0.0):
+    return {"earlier": {"expectancy_r": net_earlier, "max_drawdown_pct": dd_earlier},
+            "unseen": {"expectancy_r": net_unseen, "max_drawdown_pct": dd_unseen}}
+
+
+def test_a3_best_selection_uses_only_earlier_period_numbers():
+    base = _summary(0.35, 0.179)
+    singles = [("A3-notime", "time", _summary(0.40, 0.19, net_unseen=-5.0)),     # better, +1.1pt dd: in
+               ("A3-time120", "time", _summary(0.38, 0.18, net_unseen=9.0)),      # better, but notime is better
+               ("A3-rank50", "rank", _summary(0.36, 0.205)),                      # +2.6pt dd: out
+               ("A3-norank", "rank", _summary(0.30, 0.15, net_unseen=9.0)),       # worse R: out (unseen ignored)
+               ("A3-group", "group", _summary(0.351, 0.199)),                     # +2.0pt dd exactly: in
+               ("A3-8pos", "pos", _summary(0.35, 0.17))]                          # not better: out
+    chosen, notes = study.select_a3_best(base, singles)
+    assert chosen == ["A3-notime", "A3-group"]
+    assert any("A3-time120" in n for n in notes) and all("unseen" not in n.lower() for n in notes)
+    # flipping every unseen number changes nothing
+    flipped = [(l, f, {**s, "unseen": {"expectancy_r": -s["unseen"]["expectancy_r"], "max_drawdown_pct": 0.9}})
+               for l, f, s in singles]
+    assert study.select_a3_best(base, flipped)[0] == chosen
+
+
+def test_a3_study_specs():
+    labels = [s[0] for s in study.A3_SINGLES]
+    assert labels == ["A3-notime", "A3-time120", "A3-rank50", "A3-norank", "A3-group", "A3-8pos"]
+    spec = {s[0]: s for s in study.A3_SINGLES}
+    assert spec["A3-notime"][2] == {"time_stop_days": None} and spec["A3-norank"][2] == {"keep_top": None}
+    assert spec["A3-group"][3] == {"max_per_group": 1, "max_per_sector": 2}
+    assert spec["A3-8pos"][3] == {"max_positions": 8, "risk_pct": 0.0075, "max_position_value": 20_000.0}
+
+
+def test_runner_stores_strategy_overrides_costs_and_notes(engine):
+    from aitrader.backtest.costs import CostModel
+    from aitrader.backtest.runner import BacktestRequest, create_run
+    series = {"NIFTY 50": flat(280, volume=0), "BRK": breakout_series()}
+    seed(engine, series)
+    run_id = create_run(engine, BacktestRequest("momentum_a2", strategy_params={"time_stop_days": None},
+                                                costs=CostModel(slippage=0.001), notes=("chosen because…",)))
+    with engine.connect() as conn:
+        params = repo.backtest_run_row(conn, run_id)["params"]
+    assert params["strategy"]["time_stop_days"] is None and params["strategy_overrides"] == {"time_stop_days": None}
+    assert params["costs"]["slippage"] == 0.001 and params["notes"] == ["chosen because…"]

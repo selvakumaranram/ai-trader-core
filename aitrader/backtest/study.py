@@ -64,6 +64,130 @@ TITLES = {"c": "Combined comparison — C runs and the A/B runs re-run with the 
           "c3": "Combined comparison — C at 0.15, C2 and C3 (with the exclude-top-5 robustness check)"}
 
 
+# A3: single changes vs A2-base — (label, family, strategy overrides, money overrides)
+A3_SINGLES = [
+    ("A3-notime", "time", {"time_stop_days": None}, {}),
+    ("A3-time120", "time", {"time_stop_days": 120}, {}),
+    ("A3-rank50", "rank", {"keep_top": 50}, {}),
+    ("A3-norank", "rank", {"keep_top": None}, {}),
+    ("A3-group", "group", {}, {"max_per_group": 1, "max_per_sector": 2}),
+    ("A3-8pos", "pos", {}, {"max_positions": 8, "risk_pct": 0.0075, "max_position_value": 20_000.0}),
+]
+A3_MAX_DD_INCREASE = 0.02
+
+
+def select_a3_best(base_summary: dict, singles) -> Tuple[List[str], List[str]]:
+    """Pick the single changes for A3-best using ONLY earlier-period numbers: a change qualifies when its earlier
+    net R per trade beats A2-base and its earlier max drawdown is at most 2 points higher; within a family (time,
+    rank) only the qualifier with the better earlier net R is kept. Returns (chosen labels, reasoning lines)."""
+    b = base_summary["earlier"]
+    notes = [f"A2-base, earlier years: net {b['expectancy_r']:+.3f}R per trade, max drawdown "
+             f"{b['max_drawdown_pct'] * 100:.1f}%. Rule fixed in advance: a change qualifies if its earlier net R is "
+             f"higher and its earlier max drawdown is no more than {A3_MAX_DD_INCREASE * 100:.0f} points higher; one "
+             "time-stop and one rank variant at most (the better earlier net R)."]
+    best: dict = {}
+    order: List[str] = []
+    for label, family, summary in singles:
+        e = summary["earlier"]
+        better = e["expectancy_r"] > b["expectancy_r"]
+        dd_change = e["max_drawdown_pct"] - b["max_drawdown_pct"]
+        ok = better and dd_change <= A3_MAX_DD_INCREASE + 1e-9
+        notes.append(f"{label}: earlier net {e['expectancy_r']:+.3f}R ({'higher' if better else 'not higher'}), max "
+                     f"drawdown {e['max_drawdown_pct'] * 100:.1f}% ({dd_change * 100:+.1f} points) → "
+                     f"{'qualifies' if ok else 'does not qualify'}.")
+        if family not in order:
+            order.append(family)
+        if ok:
+            if family in best and best[family][1] >= e["expectancy_r"]:
+                notes.append(f"{label} qualifies but {best[family][0]} has the better earlier net R: not used.")
+                continue
+            if family in best:
+                notes.append(f"{best[family][0]} qualifies but {label} has the better earlier net R: not used.")
+            best[family] = (label, e["expectancy_r"])
+    chosen = [best[f][0] for f in order if f in best]
+    notes.append(f"A3-best = A2-base + {', '.join(chosen)}." if chosen else
+                 "No single change qualified: A3-best = A2-base settings.")
+    return chosen, notes
+
+
+def _run_one(engine, label: str, strategy: str, money: MoneyRules, start, end, out_dir: Path, log,
+             **request) -> dict:
+    log(f"Running {label} ({strategy}) …")
+    run_id = create_run(engine, BacktestRequest(strategy, start, end, money, **request))
+    execute_run(engine, run_id)
+    with engine.connect() as conn:
+        run = repo.get_backtest_run(conn, run_id)
+    if run["status"] != "ok":
+        raise RuntimeError(f"{label} (run #{run_id}) failed: {run['message']}")
+    _write(out_dir, label, run)
+    log(f"  run #{run_id} done: {(run['summary']['whole'] or {}).get('trades')} trades")
+    return run
+
+
+def run_a3_study(deps: JobDeps, out_dir: Path, start: Optional[date] = None, end: Optional[date] = None,
+                 log: Callable[[str], None] = print, base_run: int = 63) -> Dict[str, List[Tuple[str, dict]]]:
+    from aitrader.backtest.costs import CostModel
+    from aitrader.backtest.groups import load_groups
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    engine = deps.engine
+    log("Scanning full history for price jumps first …")
+    scan = run_job("scan_history", deps, deps.now().date())
+    log(f"  scan_history: {scan.status} {scan.counts}")
+    with engine.connect() as conn:
+        base_money = resolve_money(conn, ("run", base_run, {}))
+        ref = repo.backtest_run_row(conn, base_run)
+    rows: List[Tuple[str, dict]] = []
+    base = _run_one(engine, "A2-base", "momentum_a2", base_money, start, end, out_dir, log)
+    rows.append(("A2-base", base))
+    singles = []
+    specs = {}
+    for label, family, strategy_params, money_changes in A3_SINGLES:
+        run = _run_one(engine, label, "momentum_a2", replace(base_money, **money_changes), start, end, out_dir, log,
+                       strategy_params=strategy_params)
+        rows.append((label, run))
+        singles.append((label, family, run["summary"]))
+        specs[label] = (strategy_params, money_changes)
+    chosen, notes = select_a3_best(base["summary"], singles)
+    for line in notes:
+        log("  " + line)
+    best_params: dict = {}
+    best_money: dict = {}
+    for label in chosen:
+        best_params.update(specs[label][0])
+        best_money.update(specs[label][1])
+    best_money_rules = replace(base_money, **best_money)
+    best = _run_one(engine, "A3-best", "momentum_a2", best_money_rules, start, end, out_dir, log,
+                    strategy_params=best_params, notes=tuple(notes))
+    rows.append(("A3-best", best))
+
+    adani = tuple(sorted(s for s, g in load_groups().items() if g == "Adani"))
+    robustness = [
+        ("A3-best ex-Adani", best_money_rules, {"exclude": adani}),
+        ("A3-best ex-top5", best_money_rules, {"exclude": tuple(top_earlier_symbols(best))}),
+        ("A3-best Wednesday", best_money_rules, {"strategy_params": {**best_params, "signal_weekday": 2}}),
+        ("A3-best 2x slippage", best_money_rules,
+         {"costs": CostModel(slippage=CostModel().slippage * 2)}),
+        ("A3-best 20k", replace(best_money_rules, capital=20_000.0, max_position_value=7_000.0), {}),
+    ]
+    for label, money, extra in robustness:
+        request = {"strategy_params": best_params, **extra}
+        rows.append((label, _run_one(engine, label, "momentum_a2", money, start, end, out_dir, log, **request)))
+
+    sections = [comparison_markdown(rows, "Combined comparison — A2-base, single changes, A3-best and robustness "
+                                          "checks"),
+                "# How A3-best was chosen (earlier-period numbers only)\n\n" + "\n".join(f"- {n}" for n in notes)
+                + "\n",
+                "# Reproduction check\n\n- " + reproduction_line("A2-base", base["summary"], base_run,
+                                                                  ref and ref["summary"]) + "\n"]
+    combined = "\n".join(sections)
+    (out_dir / "comparison.md").write_text(combined, encoding="utf-8")
+    log("")
+    for line in combined.splitlines():
+        log(line)
+    return {"a3": rows}
+
+
 def top_earlier_symbols(run: dict, n: int = 5) -> List[str]:
     """The n stocks with the largest ₹ P&L in the run's EARLIER period (never the unseen one)."""
     by: Dict[str, float] = {}

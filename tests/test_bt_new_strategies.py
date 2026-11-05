@@ -338,3 +338,46 @@ def test_c3_settings_and_registry():
     from aitrader.backtest.runner import index_strategy_for
     from aitrader.backtest.strategies.breakout import Breakout
     assert type(index_strategy_for("breakout_c3")) is Breakout
+
+
+
+# --- A3 options: time stop off, rank exit off, weekly signal weekday ------------------------------------------
+
+def test_time_stop_off_never_produces_a_time_exit():
+    frames, days = a2_frames([FLAT] * 90)
+    s = WeeklyScripted({days[4]: [cand(days[4])]})
+    s.PARAMS = {**s.PARAMS, "time_stop_days": None}
+    (t,) = simulate(frames, days, s, MoneyRules(), COSTS).trades
+    assert t.exit_reason == "end_of_test"
+
+
+def test_a2_rank_off_exits_only_below_the_200_day_average():
+    a2 = MomentumA2()
+    a2.PARAMS = {**MomentumA2.PARAMS, "keep_top": None}
+    today = rows(AAA=a2_row(close=85.0), BBB=a2_row(r6=-0.5, r12=-0.5, r6_voladj=-9.0), CCC=a2_row())
+    eligible = today.loc[["BBB", "CCC"]]
+    assert a2.weekly_exits(DAY, eligible, today, {"AAA", "BBB"}) == {"AAA": "below_sma200"}
+    base = MomentumA2()  # keep_top 30: the same holdings go out as rank exits when not in the kept set
+    assert base.weekly_exits(DAY, eligible, today, {"AAA"}) == {"AAA": "rank_exit"}
+
+
+def test_weekly_exit_reason_reaches_the_trade_and_rank_off_never_says_rank_exit():
+    frames, days = a2_frames([FLAT] * 15)
+
+    class BelowAverage(WeeklyScripted):
+        def weekly_exits(self, day, eligible, today, held):
+            return {"AAA": "below_sma200"} if day == days[9] else {}
+
+    s = BelowAverage({days[4]: [cand(days[4])]})
+    (t,) = simulate(frames, days, s, MoneyRules(), COSTS).trades
+    assert t.exit_reason == "below_sma200" and t.exit_date == days[10].date()
+
+
+def test_wednesday_signal_days_fall_back_to_the_last_trading_day_before_it():
+    from aitrader.backtest.rules import week_signal_days
+    days = [pd.Timestamp(d) for d in ("2025-11-03", "2025-11-04", "2025-11-05", "2025-11-06", "2025-11-07",  # normal
+                                      "2025-11-10", "2025-11-11", "2025-11-13", "2025-11-14",  # Wed 12 holiday
+                                      "2025-11-20", "2025-11-21")]  # Mon–Wed holidays: no Wednesday-or-before
+    assert week_signal_days(days, 2) == {pd.Timestamp("2025-11-05"), pd.Timestamp("2025-11-11")}
+    assert week_signal_days(days, None) == {pd.Timestamp("2025-11-07"), pd.Timestamp("2025-11-14"),
+                                            pd.Timestamp("2025-11-21")}

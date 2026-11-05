@@ -5,7 +5,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Collection, Dict, List, Optional, Sequence, Tuple
+from typing import Collection, Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
@@ -13,7 +13,7 @@ from aitrader.backtest.costs import CostModel
 from aitrader.backtest.indicators import MIN_BARS, MIN_TRADED_VALUE
 from aitrader.backtest.rules import (
     DrawdownGuard, RiskScaler, atr_trail_stop, exit_check, gap_skip, next_trail_stop, partial_trail_check, planned_target,
-    risk_shares, round_trip_estimate, size_position, week_end_days,
+    risk_shares, round_trip_estimate, size_position, week_signal_days,
 )
 from aitrader.backtest.types import LONG, Candidate, EquityPoint, MoneyRules, Trade
 
@@ -21,7 +21,7 @@ from aitrader.backtest.types import LONG, Candidate, EquityPoint, MoneyRules, Tr
 FLAG_LOOKBACK = timedelta(days=300)
 MIN_FILL_FRACTION = 0.5  # skip entries that cash can fund at less than half the intended size
 STOP_EXITS = {"stop", "stop_gap", "stop_same_day"}  # exits that start a re-entry cooldown (not trail/target/time)
-OPEN_EXITS = {"stop_gap", "target_gap", "rank_exit"}  # sold at the open: that day's high came after the exit
+OPEN_EXITS = {"stop_gap", "target_gap", "rank_exit", "below_sma200"}  # sold at the open: that day's high came after the exit
 _EMPTY = pd.DataFrame(columns=["open", "high", "low", "close", "volume", "bars", "value20"])
 
 
@@ -54,7 +54,7 @@ class _Position:
     partial: Optional[dict] = None
     sizing: dict = field(default_factory=dict)
     highest_close: float = 0.0  # highest close since entry (the entry day's close included, not the fill)
-    rank_exit: bool = False  # set at a weekly signal day's close: sell at the next open
+    rank_exit: Union[bool, str] = False  # exit reason set at a weekly signal day's close: sell at the next open
     max_high: float = 0.0  # highest high while held (for MFE)
 
 
@@ -91,7 +91,8 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
              costs: CostModel, data_flags: Optional[Dict[str, Collection[date]]] = None,
              blocked_entry_days: Optional[Collection[date]] = None,
              regime: Optional[Dict[date, bool]] = None,
-             regime50: Optional[Dict[date, bool]] = None) -> SimResult:
+             regime50: Optional[Dict[date, bool]] = None, groups: Optional[Dict[str, str]] = None,
+             sectors: Optional[Dict[str, str]] = None) -> SimResult:
     """`regime` / `regime50`: NIFTY 50 above its 200- / 50-day average, by date (missing = below)."""
     flags = data_flags or {}
     blocked = set(blocked_entry_days or ())
@@ -100,7 +101,11 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
     params = getattr(strategy, "PARAMS", {})
     reward = params["partial_r"] if trail else (math.inf if atr_trail else money.reward_multiple)
     time_stop = params["time_stop_days"] if trail or atr_trail else money.time_stop_days
-    signal_days = week_end_days(days) if getattr(strategy, "signal_frequency", "daily") == "weekly" else None
+    if time_stop is None:  # time stop switched off
+        time_stop = math.inf
+    signal_days = (week_signal_days(days, params.get("signal_weekday"))
+                   if getattr(strategy, "signal_frequency", "daily") == "weekly" else None)
+    groups, sectors = groups or {}, sectors or {}
     entry_check = getattr(strategy, "entry_check", None)  # strategy-specific check once the fill is known
     cooldown = (money.reentry_cooldown_days if money.reentry_cooldown_days is not None
                 else params.get("reentry_cooldown_days", 0))
@@ -162,6 +167,9 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
             if len(positions) >= money.max_positions:
                 skips["no_slot"] += 1
                 continue
+            if _over_group_limit(cand.symbol, positions, groups, sectors, money):
+                skips["group_sector_limit"] += 1
+                continue
             if cand.symbol not in today.index:
                 skips["missing_bar"] += 1
                 continue
@@ -211,7 +219,8 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                         "regime_on": regime_on(cand.signal_date), "charge_to_risk": round(charge_ratio, 5),
                         "entry_open": open_, "signal_close": cand.signal_close,
                         "atr_pct": signal_vol.get(cand.symbol),
-                        "nifty_above_sma50": above50.get(cand.signal_date) if regime50 is not None else None})
+                        "nifty_above_sma50": above50.get(cand.signal_date) if regime50 is not None else None,
+                        "group": groups.get(cand.symbol), "sector": sectors.get(cand.symbol)})
         pending = []
 
         # 2. exits
@@ -281,10 +290,11 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
         # 5. candidates (and A2's weekly rank check) at the close
         if i < last and (signal_days is None or day in signal_days):
             eligible = today[(today["bars"] >= MIN_BARS) & (today["value20"] >= MIN_TRADED_VALUE)]
-            if atr_trail and positions and hasattr(strategy, "rank_keep"):  # A2's weekly rank exit
-                keep = strategy.rank_keep(day, eligible)
-                for symbol, pos in positions.items():
-                    pos.rank_exit = symbol not in keep
+            if atr_trail and positions:  # A2's weekly exits (rank, or below the 200-day average)
+                reasons = _weekly_exits(strategy, day, eligible, today, positions)
+                if reasons is not None:
+                    for symbol, pos in positions.items():
+                        pos.rank_exit = reasons.get(symbol) or False
             pending = strategy.candidates(day, eligible)
             signal_vol = {c.symbol: _col(today, c.symbol, "atr14") / float(today.at[c.symbol, "close"])
                           for c in pending if c.symbol in today.index}
@@ -302,6 +312,26 @@ def simulate(frames: Dict[str, pd.DataFrame], days: Sequence[pd.Timestamp], stra
                      charge_ratios_skipped, half_risk_days)
 
 
+def _over_group_limit(symbol: str, positions, groups: Dict[str, str], sectors: Dict[str, str],
+                      money: MoneyRules) -> bool:
+    """Business group first, then NSE industry."""
+    group = groups.get(symbol)
+    if money.max_per_group and group and sum(groups.get(s) == group for s in positions) >= money.max_per_group:
+        return True
+    sector = sectors.get(symbol)
+    return bool(money.max_per_sector and sector
+                and sum(sectors.get(s) == sector for s in positions) >= money.max_per_sector)
+
+
+def _weekly_exits(strategy, day, eligible, today, positions) -> Optional[Dict[str, str]]:
+    if hasattr(strategy, "weekly_exits"):
+        return strategy.weekly_exits(day, eligible, today, set(positions))
+    if hasattr(strategy, "rank_keep"):
+        keep = strategy.rank_keep(day, eligible)
+        return {s: "rank_exit" for s in positions if s not in keep}
+    return None
+
+
 def _col(today: pd.DataFrame, symbol: str, column: str) -> float:
     return float(today.at[symbol, column]) if column in today.columns else float("nan")
 
@@ -311,7 +341,8 @@ def _atr_trail_day(pos: _Position, bar, entry_day: bool, time_stop: int) -> Opti
     otherwise the usual stop/gap/time rules against the trailing stop."""
     o = bar[0]
     if pos.rank_exit and not entry_day:
-        return (o, "stop_gap") if o <= pos.stop else (o, "rank_exit")
+        reason = pos.rank_exit if isinstance(pos.rank_exit, str) else "rank_exit"
+        return (o, "stop_gap") if o <= pos.stop else (o, reason)
     hit = exit_check(LONG, bar, pos.stop, math.inf, entry_day=entry_day, days_held=pos.days_held,
                      time_stop=time_stop)
     if hit and hit[1] == "stop" and pos.stop > pos.cand.stop:

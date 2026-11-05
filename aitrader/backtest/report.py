@@ -213,6 +213,8 @@ def report_markdown(run: dict) -> str:
     add(f"- **Period tested:** {run['start_date']} → {run['end_date']} (daily candles)")
     add(f"- **Unseen period (judge here):** {run['unseen_from']} → {run['end_date']} — the last 2 years")
     add("- **Universe:** the stocks in the local database today (Nifty 200 list) + NIFTY 50 and NIFTY BANK")
+    for note in (run.get("params") or {}).get("notes") or []:
+        add(f"- **Note:** {note}")
     excluded = (run.get("params") or {}).get("exclude_symbols") or []
     if excluded:
         add(f"- **Robustness check — stocks left out:** {', '.join(excluded)}")
@@ -238,11 +240,15 @@ def report_markdown(run: dict) -> str:
             f"entry − {plain(strategy_params.get('trail_atr'))} × ATR(14)); it never moves down and applies from "
             "the next day.")
         add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at "
-            "the stop (\"trail stop\" once it has risen above the initial stop); after "
-            f"{plain(strategy_params.get('time_stop_days'))} trading days → sell at the close."
-            + (" **Rank exit:** on each weekly signal day, a held stock no longer in the top 30 by score "
-               "(or closing below its 200-day average) is sold at the next open — recorded as \"stop gap\" if "
-               "that open is already below the stop." if is_a2 else ""))
+            "the stop (\"trail stop\" once it has risen above the initial stop); "
+            + (f"after {plain(strategy_params.get('time_stop_days'))} trading days → sell at the close."
+               if strategy_params.get("time_stop_days") else "**no time stop**.")
+            + ((f" **Rank exit:** on each weekly signal day, a held stock no longer in the top "
+                f"{strategy_params.get('keep_top')} by score (or closing below its 200-day average) is sold at the "
+                "next open — recorded as \"stop gap\" if that open is already below the stop."
+                if strategy_params.get("keep_top") else
+                " **Rank exit off:** a held stock is sold at the next open only when it closes below its 200-day "
+                "average on a weekly signal day (\"below sma200\").") if is_a2 else ""))
     elif is_d:
         add("- **Exits, checked daily:** opening below the stop → sell at the open; low touches the stop → sell at "
             "the stop; high touches entry + 1.5 × (entry − stop) → sell **half** there, then the rest gets a "
@@ -290,14 +296,21 @@ def report_markdown(run: dict) -> str:
         short = strategy_params.get("regime_filter_short", False)
     add(f"| Short-term filter (NIFTY 50 above its 50- and 200-day avg) | {'On' if short else 'Off'} |")
     add(f"| Drawdown risk scaling | {'Half risk below −10% from the all-time peak, full within −5%' if money.get('dd_risk_scaling') else 'Off'} |")
+    add(f"| Max positions per business group / per NSE industry | {money.get('max_per_group') or 'Off'} / "
+        f"{money.get('max_per_sector') or 'Off'} |")
+    costs = (run.get("params") or {}).get("costs") or {}
+    if costs.get("slippage") is not None:
+        add(f"| Slippage per side | {pct(costs['slippage'])} |")
     add(f"| Re-entry cooldown after a stop | {f'{cooldown} trading days' if cooldown else 'Off'} |")
     add(f"| Drawdown pause | {'Off' if dd is None else pct(dd) + ' below peak, min ' + plain(money.get('pause_min_days', 10)) + ' trading days'} |")
     if is_a2:
         add(f"| Initial stop (× ATR14) | {plain(strategy_params.get('stop_atr'))} |")
         add(f"| Trailing stop (× ATR14 below highest close) | {plain(strategy_params.get('trail_atr'))} |")
         add(f"| Candidates per week / keep if in top | {plain(strategy_params.get('top_n'))} / "
-            f"{plain(strategy_params.get('keep_top'))} |")
-        add(f"| Time stop (trading days) | {plain(strategy_params.get('time_stop_days'))} |")
+            f"{strategy_params.get('keep_top') or 'off (exit only below the 200-day average)'} |")
+        add(f"| Time stop (trading days) | {strategy_params.get('time_stop_days') or 'Off'} |")
+        weekday = strategy_params.get("signal_weekday")
+        add(f"| Weekly signal day | {'last trading day of the week' if weekday is None else ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'][weekday] + ' (or the last trading day before it)'} |")
     elif run["strategy"] == "breakout_c3":
         add(f"| Stop never closer than (× ATR14 below the signal close) | "
             f"{plain(strategy_params.get('stop_floor_atr'))} |")
@@ -503,6 +516,19 @@ def _edge_sections(add, L: List[str], trades: List[dict], s: dict) -> None:
              for r in top["rows"])
     add(f"\nThe 5 stocks that made the most money made {rupees(top['top5_pnl'])} of the {rupees(top['total_pnl'])} "
         f"total P&L ({pct(top['top5_share'])}).\n")
+
+    for key, title in (("group", "business group"), ("sector", "NSE industry")):
+        add(f"### Profit by {title}\n")
+        add("| " + title.capitalize() + " | Trades | Net R per trade | ₹ P&L | Share of total P&L |\n|---|---|---|---|---|")
+        L.extend(f"| {r['label']} | {r['trades']} | {num(r['net_r'])} | {rupees(r['pnl'])} | {pct(r['share'])} |"
+                 for r in analysis.by_label_table(trades, key))
+        add("")
+    add(f"Share of total profit from trades above +5R: **{pct(analysis.big_winner_share(trades))}**.\n")
+    add("### Unseen period by calendar quarter (by exit date)\n")
+    add("| Quarter | Trades | Net R per trade | ₹ P&L |\n|---|---|---|---|")
+    L.extend(f"| {r['quarter']} | {r['trades']} | {num(r['net_r'])} | {rupees(r['pnl'])} |"
+             for r in analysis.quarter_table(trades, "unseen"))
+    add("")
 
     add("### Position size\n")
     add(f"- Average position value: **{rupees(size['avg_position_value'])}**")

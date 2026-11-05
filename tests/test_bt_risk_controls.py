@@ -308,3 +308,41 @@ def test_dd_risk_scaling_halves_risk_after_a_ten_percent_fall_and_counts_the_day
     equity_before = res.equity[2].equity  # entry on day 3 sizes from day 2's close
     assert equity_before < 9_000 and second.facts["risk_amount"] == pytest.approx(0.1 * equity_before, abs=0.01)  # half of 20%
     assert res.half_risk_days == 4  # days 2–5 start below −10% (the crash closes on day 1)
+
+
+
+# --- group / sector limit ----------------------------------------------------------------------------------------
+
+def _group_run(money, groups, sectors, symbols):
+    frames = {s: prep([FLAT] * 4) for s in symbols}
+    days = list(frames[symbols[0]].index)
+    plan = {days[0]: [Candidate(s, LONG, days[0].date(), 100, 95, 10.0 - k, "t", {}) for k, s in enumerate(symbols)]}
+    return simulate(frames, days, Scripted(plan), money, COSTS, groups=groups, sectors=sectors)
+
+
+def test_group_limit_blocks_a_second_adani_stock():
+    groups = {"ADANIENT": "Adani", "ADANIPOWER": "Adani"}
+    res = _group_run(MoneyRules(max_per_group=1, max_positions=5, capital=100_000),
+                     groups, {}, ["ADANIENT", "ADANIPOWER", "TCS"])
+    assert sorted(t.symbol for t in res.trades) == ["ADANIENT", "TCS"]
+    assert res.skips == {"group_sector_limit": 1}
+    assert next(t for t in res.trades if t.symbol == "ADANIENT").facts["group"] == "Adani"
+
+
+def test_sector_limit_blocks_a_third_stock_from_the_same_sector():
+    sectors = {"HDFCBANK": "Financial Services", "ICICIBANK": "Financial Services", "SBIN": "Financial Services",
+               "TCS": "Information Technology"}
+    res = _group_run(MoneyRules(max_per_group=1, max_per_sector=2, max_positions=5, capital=100_000),
+                     {}, sectors, ["HDFCBANK", "ICICIBANK", "SBIN", "TCS"])
+    assert sorted(t.symbol for t in res.trades) == ["HDFCBANK", "ICICIBANK", "TCS"]
+    assert res.skips == {"group_sector_limit": 1}
+    assert res.trades[0].facts["sector"] == "Financial Services"
+
+
+def test_group_and_sector_files_cover_the_universe():
+    from aitrader.backtest.groups import load_groups, load_sectors
+    groups, sectors = load_groups(), load_sectors()
+    assert {groups[s] for s in ("ADANIENT", "ADANIGREEN", "ADANIPOWER", "ADANIENSOL", "ATGL")} == {"Adani"}
+    assert groups["TCS"] == "Tata" and groups["BAJFINANCE"] == "Bajaj" and groups["JIOFIN"] == "Reliance"
+    assert groups["GRASIM"] == "Aditya Birla" and groups["IRFC"] == "PSU railways" and groups["PFC"] == "PSU power finance"
+    assert len(sectors) >= 200 and sectors["HDFCBANK"] == "Financial Services"

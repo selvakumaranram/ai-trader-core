@@ -98,6 +98,20 @@ def week_end_days(days: Sequence) -> Set:
     return out
 
 
+def week_signal_days(days: Sequence, weekday: Optional[int] = None) -> Set:
+    """Weekly signal days: the last trading day of each week (weekday None), or the given weekday (0 = Monday) —
+    in a holiday week the last trading day before it; a week with no trading day up to it has no signal day."""
+    if weekday is None:
+        return week_end_days(days)
+    best: dict = {}
+    for day in days:
+        if day.weekday() <= weekday:
+            key = day.isocalendar()[:2]
+            if key not in best or day > best[key]:
+                best[key] = day
+    return set(best.values())
+
+
 class RiskScaler:
     """Half the risk while equity is more than `cut` below its all-time peak (which never resets); full risk again
     once equity is back within `restore` of that peak."""
