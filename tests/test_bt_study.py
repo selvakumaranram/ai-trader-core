@@ -171,3 +171,12 @@ def test_runner_stores_strategy_overrides_costs_and_notes(engine):
         params = repo.backtest_run_row(conn, run_id)["params"]
     assert params["strategy"]["time_stop_days"] is None and params["strategy_overrides"] == {"time_stop_days": None}
     assert params["costs"]["slippage"] == 0.001 and params["notes"] == ["chosen because…"]
+
+
+def test_a3_selection_says_tie_when_two_variants_are_equal():
+    base = _summary(0.35, 0.179)
+    singles = [("A3-notime", "time", _summary(0.361, 0.194)), ("A3-time120", "time", _summary(0.361, 0.194))]
+    chosen, notes = study.select_a3_best(base, singles)
+    assert chosen == ["A3-notime"]
+    assert any("same earlier net R" in n and "first listed" in n for n in notes)
+    assert not any("better earlier net R" in n for n in notes)

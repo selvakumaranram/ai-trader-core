@@ -98,7 +98,11 @@ def select_a3_best(base_summary: dict, singles) -> Tuple[List[str], List[str]]:
         if family not in order:
             order.append(family)
         if ok:
-            if family in best and best[family][1] >= e["expectancy_r"]:
+            if family in best and best[family][1] == e["expectancy_r"]:
+                notes.append(f"{label} qualifies but has the same earlier net R as {best[family][0]}: the first "
+                             f"listed ({best[family][0]}) is kept.")
+                continue
+            if family in best and best[family][1] > e["expectancy_r"]:
                 notes.append(f"{label} qualifies but {best[family][0]} has the better earlier net R: not used.")
                 continue
             if family in best:
