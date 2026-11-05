@@ -183,8 +183,15 @@ def test_a3_selection_says_tie_when_two_variants_are_equal():
 
 
 
+def spec_of(label):
+    s = {x[0]: x for x in study.C3X_SINGLES}[label]
+    return s[1], s[2]
+
+
 def test_c3x_study_specs():
     labels = [s[0] for s in study.C3X_SINGLES]
-    assert labels == ["C3-confirm", "C3-aplus"]
+    assert labels == ["C3-confirm", "C3-aplus", "C3-failedbo", "C3-distrib"]
+    assert spec_of("C3-failedbo") == ("exit", {"failed_breakout_days": 5})
+    assert spec_of("C3-distrib") == ("exit", {"distribution_days": 2})
     spec = {s[0]: s for s in study.C3X_SINGLES}
     assert spec["C3-confirm"][2] == {"entry_confirm": True} and spec["C3-aplus"][2] == {"volume_surge": 3.0}

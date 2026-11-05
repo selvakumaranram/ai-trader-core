@@ -196,6 +196,8 @@ def run_a3_study(deps: JobDeps, out_dir: Path, start: Optional[date] = None, end
 C3X_SINGLES = [
     ("C3-confirm", "entry", {"entry_confirm": True}, {}),  # trader-entry: buy only on confirmation
     ("C3-aplus", "filter", {"volume_surge": 3.0}, {}),  # trader-risk: only the strongest setups
+    ("C3-failedbo", "exit", {"failed_breakout_days": 5}, {}),  # selling pressure: back below the breakout level
+    ("C3-distrib", "exit", {"distribution_days": 2}, {}),  # selling pressure: 2 heavy-volume down days in 10
 ]
 
 
@@ -235,7 +237,9 @@ def run_c3x_study(deps: JobDeps, out_dir: Path, start: Optional[date] = None, en
         singles.append((label, family, run["summary"]))
         specs[label] = (strategy_params, money_changes)
     chosen, notes = select_a3_best(base["summary"], singles)
-    notes = [n.replace("A2-base", "C3-base").replace("A3-best", "C3-best") for n in notes]
+    notes = [n.replace("A2-base", "C3-base").replace("A3-best", "C3-best")
+             .replace("one time-stop and one rank variant at most", "at most one variant per family (entry, filter, "
+                      "exit)") for n in notes]
     params: dict = {}
     money_changes: dict = {}
     for label in chosen:
