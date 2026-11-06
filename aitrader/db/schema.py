@@ -254,6 +254,10 @@ shadow_signals = Table(
     Column("user_view", String(10)),  # agree | disagree
     Column("user_view_at", DateTime(timezone=True)),
     Column("pick_note", Text),  # your-picks portfolio: "bought" or why it was skipped
+    Column("ai_view", String(10)),  # pick | skip (AI picks portfolio)
+    Column("ai_reason", Text),
+    Column("ai_model", String(60)),
+    Column("ai_note", Text),  # AI picks portfolio: "bought" or why it was skipped
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("signal_date", "rule", "underlying", name="uq_shadow_signals_day_rule_symbol"),
 )

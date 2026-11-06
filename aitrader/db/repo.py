@@ -479,13 +479,23 @@ def insert_shadow_trade(conn: Connection, **values) -> int:
     """A "mine" (your picks) trade records the outcome in the signal's pick_note; the signal's status stays the
     rule portfolio's."""
     trade_id = conn.execute(shadow_trades.insert().values(**values).returning(shadow_trades.c.id)).scalar_one()
-    change = {"pick_note": "bought"} if values.get("portfolio", "rule") == "mine" else {"status": "entered"}
+    note = PORTFOLIO_NOTE.get(values.get("portfolio", "rule"))
+    change = {note: "bought"} if note else {"status": "entered"}
     conn.execute(update(shadow_signals).where(shadow_signals.c.id == values["signal_id"]).values(**change))
     return trade_id
 
 
-def set_shadow_pick_note(conn: Connection, signal_id: int, note: str) -> None:
-    conn.execute(update(shadow_signals).where(shadow_signals.c.id == signal_id).values(pick_note=note))
+PORTFOLIO_NOTE = {"mine": "pick_note", "ai": "ai_note"}  # where a non-rule portfolio records bought / skipped
+
+
+def set_shadow_pick_note(conn: Connection, signal_id: int, note: str, portfolio: str = "mine") -> None:
+    conn.execute(update(shadow_signals).where(shadow_signals.c.id == signal_id)
+                 .values({PORTFOLIO_NOTE[portfolio]: note}))
+
+
+def set_shadow_ai_view(conn: Connection, signal_id: int, view: str, reason: str, model: str) -> None:
+    conn.execute(update(shadow_signals).where(shadow_signals.c.id == signal_id)
+                 .values(ai_view=view, ai_reason=reason, ai_model=model))
 
 
 def latest_plain_run(conn: Connection, strategy: str) -> Optional[dict]:
