@@ -49,8 +49,8 @@ EXPERIMENTS = [
     (2, "E2-ema50", None, {"trend": "ema50"}, {}, "trend = close above 50 EMA"),
     (2, "E2-ema100", None, {"trend": "ema100"}, {}, "trend = close above 100 EMA"),
     (2, "E2-ema200", None, {"trend": "ema200"}, {}, "trend = close above 200 EMA"),
-    (2, "E2-ema50>200", None, {"trend": "ema50_200"}, {}, "trend = 50 EMA above 200 EMA"),
-    (2, "E2-px>ema50&200", None, {"trend": "above_ema50_200"}, {}, "trend = close above 50 and 200 EMA"),
+    (2, "E2-ema50over200", None, {"trend": "ema50_200"}, {}, "trend = 50 EMA above 200 EMA"),
+    (2, "E2-above-ema50-200", None, {"trend": "above_ema50_200"}, {}, "trend = close above 50 and 200 EMA"),
     (2, "E2-adx20", "adx", {"adx_min": 20}, {}, "original trend + ADX(14) ≥ 20"),
     (2, "E2-adx25", "adx", {"adx_min": 25}, {}, "original trend + ADX(14) ≥ 25"),
     (3, "E3-break", None, {"entry_confirm": True}, {}, "buy only when the next day trades above the touch day's high"),
@@ -69,7 +69,7 @@ EXPERIMENTS = [
     (5, "E5-atrtrail", None, {"exit_policy": "atr_trail", "trail_atr": 3.0, "time_stop_days": 40}, {},
      "no target: 3-ATR trailing stop, 40-day time exit"),
     (6, "E6-no-regime", None, {}, {"regime_filter": False}, "no NIFTY 200-day filter"),
-    (6, "E6-nifty50&200", None, {}, {"regime_filter_short": True}, "NIFTY above its 50- AND 200-day averages"),
+    (6, "E6-nifty50and200", None, {}, {"regime_filter_short": True}, "NIFTY above its 50- AND 200-day averages"),
 ]
 NOT_TESTED = [
     "Entry on a support retest and limit orders near support (C4, C6): need intraday fills the daily engine does not "

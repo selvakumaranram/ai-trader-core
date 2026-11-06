@@ -81,3 +81,9 @@ def test_feature_buckets_split_by_fixed_edges():
     rows = M.feature_buckets(trades, "moved_atr", [1.0, 2.0])
     assert [(b["bucket"], b["n"]) for b in rows] == [("< 1", 2), ("1 – 2", 1), ("≥ 2", 2), ("unknown", 1)]
     assert rows[2]["expectancy_r"] == 2.0 and rows[0]["win_rate"] == 0.5
+
+
+def test_experiment_labels_are_safe_windows_file_names():
+    import re
+    for _, label, *_ in M.EXPERIMENTS:
+        assert re.fullmatch(r"[A-Za-z0-9.\-]+", label), label
