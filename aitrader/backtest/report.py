@@ -15,7 +15,7 @@ NAMES = {"momentum": "A — Momentum", "pullback": "B — Trend pullback", "brea
          "pullback_b3": "B3 — Trend pullback, let winners run",
          "breakout_c3": "C3 — Breakout, trend-confirmed",
          "momentum_a3": "A3 — Medium-term momentum (A3-best)",
-         "breakout_momentum": "C4 — Breakout + momentum"}
+         "breakout_momentum": "C4 — Breakout + momentum", "msnr": "M — Malaysian SnR (fresh support)"}
 
 RULES = {
     "pullback": """\
@@ -150,6 +150,17 @@ RULES["breakout_momentum"] = RULES["breakout_c3"] + """
 **C4 = C3 + momentum:** a breakout is taken only when the stock is also in the **top 30** of A2's medium-term
 momentum ranking that day (6- and 12-month returns skipping the latest month, and the volatility-adjusted 6-month
 return; see strategy A2)."""
+
+RULES["msnr"] = """**Idea:** Malaysian support & resistance (MSNR): levels at candle bodies, traded on their first touch.
+
+- **V-level (support):** a red day followed by a green day; the level is the red day's close. It can be used from the
+  day after the green day.
+- **Signal:** the day's low reaches a fresh (never touched) V-level and the close stays above it. Any touch uses the
+  level up; a close below it breaks it with no signal.
+- **Storyline (trend):** close above the 200-day average and the 50-day above the 200-day.
+- **Trade:** buy at the next open; stop ½ ATR(14) below the level (1–8% away), target 2R, 20-day time stop.
+
+The original is traded on 4-hour forex charts; this test uses daily NSE bars."""
 
 SKIP_NOTES = {
     "regime_off": "NIFTY 50 closed at or below its 200-day average on the signal day (long entries only)",
