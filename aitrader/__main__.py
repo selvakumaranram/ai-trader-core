@@ -57,7 +57,7 @@ def _parser() -> argparse.ArgumentParser:
     job.add_argument("--years", type=int, default=10, help="backfill_history only")
     sub.add_parser("live-check", help="read-only Kite round-trip once your plan is active")
     study = sub.add_parser("study", help="run the A/B fix backtests and write reports + comparison tables")
-    study.add_argument("--which", nargs="+", choices=["a", "b", "c", "b3", "c3", "a3", "c3x"], default=["c3x"])
+    study.add_argument("--which", nargs="+", choices=["a", "b", "c", "b3", "c3", "a3", "c3x", "msnr2"], default=["c3x"])
     study.add_argument("--out", type=Path, default=Path.home() / "Downloads" / "ai-trader-reports" / "study")
     study.add_argument("--start", type=date.fromisoformat, default=date(2017, 8, 14))
     study.add_argument("--end", type=date.fromisoformat, default=date(2026, 10, 30))
@@ -121,6 +121,10 @@ def main(argv=None) -> int:
     if args.command == "study":
         from aitrader.backtest.study import run_study
 
+        if args.which == ["msnr2"]:
+            from aitrader.backtest.msnr_study import run_msnr_study
+            run_msnr_study(deps.engine, args.out)
+            return 0
         if args.which == ["c3x"]:
             from aitrader.backtest.study import run_c3x_study
 

@@ -84,6 +84,85 @@ def test_stop_too_far_is_skipped():
 
 def test_registered_with_a_fixed_two_r_target():
     assert STRATEGIES["msnr"] is MalaysianSnR
-    assert getattr(MalaysianSnR, "exit_policy", "fixed_target") == "fixed_target"
+    assert MalaysianSnR().exit_policy == "fixed_target"
     df = MalaysianSnR().prepare(add_indicators(bars(*([GREEN] * 30))))
     assert "msnr_level" in df.columns
+
+
+# --- v2 research options (all off by default: the baseline is unchanged) ------------------------------------------
+
+from aitrader.backtest.strategies.msnr import support_touches  # noqa: E402
+
+BASE = [GREEN, (102, 102.5, 98, 99, 1e6), (99, 104, 98.8, 103, 1e6), (103, 106, 102, 105, 1e6),
+        (105, 105.5, 98.5, 101, 1e6)]
+
+
+def test_touch_records_level_quality_facts():
+    out = support_touches(bars(*BASE))
+    row = out.iloc[4]
+    assert row["level"] == 99.0
+    assert row["red_body"] == pytest.approx(3 / 4.5)       # red candle: body 102→99 over range 98–102.5
+    assert row["green_body"] == pytest.approx(4 / 5.2)     # green: 99→103 over 98.8–104
+    assert row["age"] == 1                                  # usable from bar 3, touched on bar 4
+    assert row["moved_atr"] > 0
+
+
+@pytest.mark.parametrize("params, signals", [
+    ({"red_body_min": 0.6}, True), ({"red_body_min": 0.7}, False),
+    ({"green_body_min": 0.7}, True), ({"green_body_min": 0.8}, False),
+    ({"min_age": 1}, True), ({"min_age": 2}, False),
+])
+def test_quality_filters(params, signals):
+    out = support_touches(bars(*BASE), **params)
+    assert (not math.isnan(out.iloc[4]["level"])) is signals
+
+
+def test_a_filtered_touch_still_uses_the_level_up():
+    rows = BASE + [(101, 101.5, 100.5, 100.8, 1e6)] * 3 + [(100.8, 104, 98.9, 102, 1e6)]
+    out = support_touches(bars(*rows), min_age=2)
+    assert out["level"].isna().all()  # first touch (age 1) is filtered and uses the level; the later one is not fresh
+
+
+def v2_row(**over):
+    base = dict(open=100.0, high=101.5, low=98.5, close=101.0, volume=1e6, sma50=95.0, sma200=90.0, atr14=2.0,
+                msnr_level=99.0, ema20=100.0, ema50=97.0, ema100=94.0, ema200=92.0, adx14=25.0,
+                msnr_red_body=0.6, msnr_green_body=0.7, msnr_green_relvol=1.2, msnr_age=3, msnr_moved_atr=2.5)
+    return {**base, **over}
+
+
+def cands(params=None, **over):
+    s = MalaysianSnR()
+    s.PARAMS = {**s.PARAMS, **(params or {})}
+    return s.candidates(pd.Timestamp("2025-03-03"), pd.DataFrame.from_dict({"AAA": v2_row(**over)}, orient="index"))
+
+
+@pytest.mark.parametrize("trend, over, ok", [
+    ("ema20", dict(close=99.5), False), ("ema20", {}, True),
+    ("ema50_200", dict(ema50=91.0), False), ("ema50_200", dict(sma50=80.0), True),
+    ("above_ema50_200", dict(ema50=101.5), False),
+    ("ema200", dict(sma50=80.0), True),
+])
+def test_trend_variants_replace_the_original_filter(trend, over, ok):
+    assert bool(cands({"trend": trend}, **over)) is ok
+
+
+def test_adx_and_bullish_close_filters():
+    assert cands({"adx_min": 20}) and not cands({"adx_min": 20}, adx14=15.0)
+    assert cands({"bullish_close": True}) and not cands({"bullish_close": True}, open=101.2)
+
+
+def test_stop_modes():
+    (c,) = cands({"stop_atr": 1.0})
+    assert c.stop == pytest.approx(97.0)
+    (c,) = cands({"stop_mode": "structure"})  # below the touch day's low: 98.5 - 0.25 x 2
+    assert c.stop == pytest.approx(98.0)
+    assert c.facts["signal_high"] == 101.5 and c.facts["green_relvol"] == 1.2
+
+
+def test_exit_policy_comes_from_params_and_prepare_adds_the_columns():
+    s = MalaysianSnR()
+    assert s.exit_policy == "fixed_target"
+    s.PARAMS = {**s.PARAMS, "exit_policy": "partial_trail"}
+    assert s.exit_policy == "partial_trail"
+    df = s.prepare(add_indicators(bars(*([GREEN] * 40))))
+    assert {"low5", "high5", "ema20", "ema50", "ema100", "ema200", "adx14", "msnr_age"} <= set(df.columns)
